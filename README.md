@@ -58,19 +58,18 @@ Run interactive or automated scans with command-line flags:
 
 ## 🚀 Suite Profiles & Operations
 
-PZ-Mod-Performance-Suite features 9 selectable operations to fit your workflow:
+PZ-Mod-Performance-Suite features 8 selectable operations to fit your workflow:
 
 | Profile | Action / Target | Typical Duration | Best For |
 | :--- | :--- | :--- | :--- |
-| **`[1] Full Diagnostic Scan`** *(Default)* | Active Save (`mods.txt`), Workshop, Lua Hooks, VRAM, Hitches, Overrides | **~2.5 seconds** | Comprehensive performance & conflict audit of active save |
-| **`[2] Stutter & Lag Spike Roster`** | Focused 1-line stutter impact table across all active mods | **~2.5 seconds** | Instantly spotting which mods cause freezes without file clash noise |
-| **`[3] Dedicated Server Scan`** | Dedicated server `.ini` files (`servertest.ini` or custom path) | **~2.5 seconds** | Auditing server modpacks for VPS, Pterodactyl, and Co-op hosts |
-| **`[4] Scan Local Workshop Mods`** | Local workshop development folder (`Zomboid\Workshop`) | **< 1 second** | Profiling custom mods under development before publishing to Steam |
-| **`[5] 1-Click Java GC Tuning`** | `ProjectZomboid64.json` launcher configuration | **< 1 second** | Eliminating 200–400ms periodic world freezes via low-latency G1GC |
-| **`[6] Safe Frame Cap Tuning`** | `options.ini` display frameRate setting | **< 1 second** | Throttling Lua tick execution overhead down from 240/uncapped FPS |
-| **`[7] Clean Phantom Mods`** | Active savegame `mods.txt` | **< 1 second** | Purging uninstalled ghost mods to stop console spam and speed up boot |
-| **`[8] Revert Changes / Backups`** | JVM config, FPS cap, and savegame mods | **< 1 second** | Safely restoring original `.bak` backups and vanilla engine settings |
-| **`[9] Open Last Report`** | `ModPerformanceReport.md` | **Instant** | Viewing detailed breakdown, conflict tables, and Discord summaries |
+| **`[1] Full Diagnostic Scan`** *(Default)* | Active Save (`mods.txt`), Workshop, Lua Hooks, VRAM, Hitches, Stutter Roster, Overrides | **~2.5 seconds** | Complete performance, stutter ranking & conflict audit of active save |
+| **`[2] Dedicated Server Scan`** | Dedicated server `.ini` files (`servertest.ini` or custom path) | **~2.5 seconds** | Auditing server modpacks for VPS, Pterodactyl, and Co-op hosts |
+| **`[3] Scan Local Workshop Mods`** | Local workshop development folder (`Zomboid\Workshop`) | **< 1 second** | Profiling custom mods under development before publishing to Steam |
+| **`[4] 1-Click Java GC Tuning`** | `ProjectZomboid64.json` launcher configuration | **< 1 second** | Eliminating 200–400ms periodic world freezes via low-latency G1GC |
+| **`[5] Safe Frame Cap Tuning`** | `options.ini` display frameRate setting | **< 1 second** | Throttling Lua tick execution overhead down from 240/uncapped FPS |
+| **`[6] Clean Phantom Mods`** | Active savegame `mods.txt` | **< 1 second** | Purging uninstalled ghost mods to stop console spam and speed up boot |
+| **`[7] Revert Changes / Backups`** | JVM config, FPS cap, and savegame mods | **< 1 second** | Safely restoring original `.bak` backups and vanilla engine settings |
+| **`[8] Open Last Report`** | `ModPerformanceReport.md` | **Instant** | Viewing detailed breakdown, conflict tables, and Discord summaries |
 
 ---
 
@@ -82,7 +81,7 @@ PZ-Mod-Performance-Suite features 9 selectable operations to fit your workflow:
 * **🩺 Precision Slow Frame Anatomy Dissection (v2.5.0):** Dissects every slow-frame log line in Build 42 into its component sub-stalls:
   * **Main vs. Render Thread Origin:** Distinguishes CPU simulation freezes from GPU draw stalls.
   * **Java GC Pauses vs. Chunk Meshing:** Measures the exact millisecond pause caused by JVM garbage collection sweeps (`the collector's pauses`) versus geometry compilation (`chunk cache builds`).
-  * **Actionable Root Cause:** Pinpoints whether a spike requires JVM G1GC tuning (Option `[5]`) or custom 3D model trimming.
+  * **Actionable Root Cause:** Pinpoints whether a spike requires JVM G1GC tuning (Option `[4]`) or custom 3D model trimming.
 * **🛡️ Causal Bottleneck Filtering (Zero False Mod Accusations):** Prevents innocent Lua UI or QOL mods from being falsely blamed for world hitches. If an engine freeze is caused by Java GC sweeps or chunk meshing, the suite attributes the stall directly to JVM memory or 3D mesh packs, keeping QOL mod ratings clean and accurate.
 * **⏱️ Hardware Frame Times & Simulation Headroom:** Extracts real-time GPU render times, Render CPU frame times, and Main Thread simulation duration (`main thread frame 9.70 ms -> 103 FPS headroom`) alongside active loaded zombie counts.
 * **🔗 Multi-Culprit Telemetry Correlation Engine:** Deeply correlates recorded engine telemetry from `console.txt` across multiple bottleneck vectors:
@@ -147,7 +146,7 @@ PZ-Mod-Performance-Suite features 9 selectable operations to fit your workflow:
 ```text
 
 =================================================================
-   PROJECT ZOMBOID MOD PERFORMANCE & OPTIMIZATION SUITE v2.6.0  
+   PROJECT ZOMBOID MOD PERFORMANCE & OPTIMIZATION SUITE v2.6.1  
          Created by @KodeMannn with the help of Gemini          
 =================================================================
 
@@ -169,7 +168,7 @@ PZ-Mod-Performance-Suite features 9 selectable operations to fit your workflow:
    -> SPIKE ANATOMY   : 425.1 ms Engine & GC Pauses (95.2%) | 21.3 ms Chunk Meshing & Passes (4.8%)
    -> ROOT CAUSE      : Severe Java Garbage Collection Freeze (Engine Memory Sweep)
    -> ATTRIBUTION     : JVM Heap Garbage Collection. NOT caused by Lua UI or QOL mods.
-   -> ACTIONABLE FIX  : Apply Menu Option [5] (One-Click G1GC + 5ms Pause Tuning) to eliminate GC freezes.
+   -> ACTIONABLE FIX  : Apply Menu Option [4] (One-Click G1GC + 5ms Pause Tuning) to eliminate GC freezes.
    -> TOP CORRELATED SPIKE CULPRITS:
       [1] 6261 3D models for Viewpoint ... | Pred: ~350-550 ms [Severe Freeze]  | Chunk Border Traversal & High-Speed Driving
       [2] Project Viewpoint QOL            | Pred: ~10-35 ms [Combat Hitch]     | Horde Proximity & Combat

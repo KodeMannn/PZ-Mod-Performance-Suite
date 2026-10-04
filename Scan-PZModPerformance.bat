@@ -1,6 +1,6 @@
 <# :
 @echo off
-title Project Zomboid Mod Performance ^& Optimization Suite v2.6.0
+title Project Zomboid Mod Performance ^& Optimization Suite v2.6.1
 color 0F
 powershell -NoProfile -ExecutionPolicy Bypass -Command "& ([scriptblock]::Create([System.IO.File]::ReadAllText('%~f0'))) %*"
 echo.
@@ -9,7 +9,7 @@ exit /b
 #>
 <#
 .SYNOPSIS
-    Project Zomboid Mod Performance & Optimization Suite v2.6.0
+    Project Zomboid Mod Performance & Optimization Suite v2.6.1
 .DESCRIPTION
     Comprehensive diagnostic scanner and optimization toolkit for Project Zomboid (Build 42 & 41).
     Features Precision Slow Frame Anatomy Dissection (Main vs Render Thread, GC pauses vs Chunk Cache),
@@ -643,9 +643,9 @@ function Get-ModStutterMetrics {
 # ==============================================================================
 # Core Diagnostic Engine
 # ==============================================================================
-function Invoke-PZScanEngine([string]$CustomServerIni = "", [switch]$LocalWorkshopOnly, [string]$CustomWorkshopPath = "", [switch]$StutterRosterOnly) {
+function Invoke-PZScanEngine([string]$CustomServerIni = "", [switch]$LocalWorkshopOnly, [string]$CustomWorkshopPath = "") {
     Write-Host "`n=================================================================" -ForegroundColor Cyan
-    Write-Host "   PROJECT ZOMBOID MOD PERFORMANCE & OPTIMIZATION SUITE v2.6.0  " -ForegroundColor Yellow
+    Write-Host "   PROJECT ZOMBOID MOD PERFORMANCE & OPTIMIZATION SUITE v2.6.1  " -ForegroundColor Yellow
     Write-Host "         Created by @KodeMannn with the help of Gemini          " -ForegroundColor DarkCyan
     Write-Host "=================================================================`n" -ForegroundColor Cyan
 
@@ -1308,7 +1308,7 @@ function Invoke-PZScanEngine([string]$CustomServerIni = "", [switch]$LocalWorksh
             $worstSpikeAnatomy = "$wRest ms Engine & GC Pauses ($gcPct%) | $wOurs ms Chunk Meshing & Passes ($ccPct%)"
             $worstSpikeRootCause = "Severe Java Garbage Collection Freeze (Engine Memory Sweep)"
             $worstSpikeAttribution = "JVM Heap Garbage Collection. NOT caused by Lua UI or QOL mods."
-            $worstSpikeRecommendation = "Apply Menu Option [5] (One-Click G1GC + 5ms Pause Tuning) to eliminate GC freezes."
+            $worstSpikeRecommendation = "Apply Menu Option [4] (One-Click G1GC + 5ms Pause Tuning) to eliminate GC freezes."
             if ($wCC -ge 10.0 -or $wBuilds -ge 10) {
                 $worstSpikeCorrelatedMods = @($topMeshMods | Select-Object -First 5)
             } else {
@@ -1324,7 +1324,7 @@ function Invoke-PZScanEngine([string]$CustomServerIni = "", [switch]$LocalWorksh
             $worstSpikeAnatomy = "$wRest ms Waiting for Main Thread ($gcPct%) | $wOurs ms Render Passes ($ccPct%)"
             $worstSpikeRootCause = "GPU Render Thread Blocked Waiting for CPU Main Thread Tick"
             $worstSpikeAttribution = "Main thread CPU tick budget overflow from excessive per-frame Lua loops."
-            $worstSpikeRecommendation = "Lower in-game frame rate cap to 120 FPS (Option [6]) or reduce vehicle fleet mods."
+            $worstSpikeRecommendation = "Lower in-game frame rate cap to 120 FPS (Option [5]) or reduce vehicle fleet mods."
             $worstSpikeCorrelatedMods = @($topCpuMods | Select-Object -First 5)
         } else {
             $worstSpikeAnatomy = "$wRest ms Engine Simulation | $wOurs ms Mod Passes"
@@ -1514,45 +1514,43 @@ function Invoke-PZScanEngine([string]$CustomServerIni = "", [switch]$LocalWorksh
         }
     }
 
-    if (-not $StutterRosterOnly) {
-        if ($uninstalledMods.Count -gt 0) {
-            Write-Host "`n [!] Notice: $($uninstalledMods.Count) mod(s) in save are uninstalled from disk (omitted from performance audit):" -ForegroundColor DarkYellow
-            foreach ($um in $uninstalledMods) {
-                Write-Host "     - $um" -ForegroundColor Gray
+    if ($uninstalledMods.Count -gt 0) {
+        Write-Host "`n [!] Notice: $($uninstalledMods.Count) mod(s) in save are uninstalled from disk (omitted from performance audit):" -ForegroundColor DarkYellow
+        foreach ($um in $uninstalledMods) {
+            Write-Host "     - $um" -ForegroundColor Gray
+        }
+        Write-Host "     -> Tip: Select Menu Option [6] to clean these phantom mods from your save." -ForegroundColor Cyan
+    }
+
+    if ($collisions.Count -gt 0) {
+        Write-Host "`n-----------------------------------------------------------------" -ForegroundColor Gray
+        Write-Host "   DETECTED MOD FILE OVERRIDE CONFLICTS" -ForegroundColor Yellow
+        Write-Host "-----------------------------------------------------------------" -ForegroundColor Gray
+        Write-Host " Total File Overlaps: $($collisions.Count) ($($safeCollisions.Count) Safe, $($riskyCollisions.Count) High/Moderate Risk)" -ForegroundColor Cyan
+        
+        if ($riskyCollisions.Count -gt 0) {
+            Write-Host "`n [ALERT] High-Risk Code / Script Overrides ($($riskyCollisions.Count) detected):" -ForegroundColor Red
+            foreach ($rc in ($riskyCollisions | Select-Object -First 5)) {
+                Write-Host "   [!] $($rc.Path)" -ForegroundColor Yellow
+                Write-Host "       Category: $($rc.Category)" -ForegroundColor DarkYellow
+                Write-Host "       Impact:   $($rc.Note)" -ForegroundColor Gray
+                Write-Host "       Mods:     $($rc.Mods)" -ForegroundColor Gray
             }
-            Write-Host "     -> Tip: Select Menu Option [7] to clean these phantom mods from your save." -ForegroundColor Cyan
+            if ($riskyCollisions.Count -gt 5) {
+                Write-Host "   ... and $($riskyCollisions.Count - 5) more high-risk overrides (see ModPerformanceReport.md)" -ForegroundColor Gray
+            }
+        } else {
+            Write-Host "`n [OK] No high-risk script or logic conflicts detected!" -ForegroundColor Green
         }
 
-        if ($collisions.Count -gt 0) {
-            Write-Host "`n-----------------------------------------------------------------" -ForegroundColor Gray
-            Write-Host "   DETECTED MOD FILE OVERRIDE CONFLICTS" -ForegroundColor Yellow
-            Write-Host "-----------------------------------------------------------------" -ForegroundColor Gray
-            Write-Host " Total File Overlaps: $($collisions.Count) ($($safeCollisions.Count) Safe, $($riskyCollisions.Count) High/Moderate Risk)" -ForegroundColor Cyan
-            
-            if ($riskyCollisions.Count -gt 0) {
-                Write-Host "`n [ALERT] High-Risk Code / Script Overrides ($($riskyCollisions.Count) detected):" -ForegroundColor Red
-                foreach ($rc in ($riskyCollisions | Select-Object -First 5)) {
-                    Write-Host "   [!] $($rc.Path)" -ForegroundColor Yellow
-                    Write-Host "       Category: $($rc.Category)" -ForegroundColor DarkYellow
-                    Write-Host "       Impact:   $($rc.Note)" -ForegroundColor Gray
-                    Write-Host "       Mods:     $($rc.Mods)" -ForegroundColor Gray
-                }
-                if ($riskyCollisions.Count -gt 5) {
-                    Write-Host "   ... and $($riskyCollisions.Count - 5) more high-risk overrides (see ModPerformanceReport.md)" -ForegroundColor Gray
-                }
-            } else {
-                Write-Host "`n [OK] No high-risk script or logic conflicts detected!" -ForegroundColor Green
+        if ($safeCollisions.Count -gt 0) {
+            Write-Host "`n [SAFE] Safe Overrides ($($safeCollisions.Count) harmless files):" -ForegroundColor Green
+            Write-Host "        $($safeCollisions.Count) files are SAFE translation merges, shared UI icons, or Git metadata." -ForegroundColor Gray
+            foreach ($sc in ($safeCollisions | Select-Object -First 3)) {
+                Write-Host "   [SAFE] $($sc.Path) ($($sc.Category))" -ForegroundColor DarkGreen
             }
-
-            if ($safeCollisions.Count -gt 0) {
-                Write-Host "`n [SAFE] Safe Overrides ($($safeCollisions.Count) harmless files):" -ForegroundColor Green
-                Write-Host "        $($safeCollisions.Count) files are SAFE translation merges, shared UI icons, or Git metadata." -ForegroundColor Gray
-                foreach ($sc in ($safeCollisions | Select-Object -First 3)) {
-                    Write-Host "   [SAFE] $($sc.Path) ($($sc.Category))" -ForegroundColor DarkGreen
-                }
-                if ($safeCollisions.Count -gt 3) {
-                    Write-Host "   ... and $($safeCollisions.Count - 3) more safe files (see ModPerformanceReport.md)" -ForegroundColor Gray
-                }
+            if ($safeCollisions.Count -gt 3) {
+                Write-Host "   ... and $($safeCollisions.Count - 3) more safe files (see ModPerformanceReport.md)" -ForegroundColor Gray
             }
         }
     }
@@ -1560,7 +1558,7 @@ function Invoke-PZScanEngine([string]$CustomServerIni = "", [switch]$LocalWorksh
     # Generate Markdown Report
     $md = @()
     $md += "# Project Zomboid Mod Performance & Optimization Diagnostic Report"
-    $md += "*Generated: $(Get-Date -Format 'yyyy-MM-dd HH:mm:ss') on $env:COMPUTERNAME by PZ-Mod-Performance-Suite v2.6.0 (Coded with the help of Google Gemini)*"
+    $md += "*Generated: $(Get-Date -Format 'yyyy-MM-dd HH:mm:ss') on $env:COMPUTERNAME by PZ-Mod-Performance-Suite v2.6.1 (Coded with the help of Google Gemini)*"
     $md += ""
     $md += "## Executive Summary"
     $md += "- **Game Version:** $pzVersion"
@@ -1724,22 +1722,21 @@ function Show-PZMainMenu {
     while ($true) {
         Clear-Host
         Write-Host "=================================================================" -ForegroundColor Cyan
-        Write-Host "   PROJECT ZOMBOID MOD PERFORMANCE & OPTIMIZATION SUITE v2.6.0  " -ForegroundColor Yellow
+        Write-Host "   PROJECT ZOMBOID MOD PERFORMANCE & OPTIMIZATION SUITE v2.6.1  " -ForegroundColor Yellow
         Write-Host "         Created by @KodeMannn with the help of Gemini          " -ForegroundColor DarkCyan
         Write-Host "=================================================================" -ForegroundColor Cyan
         Write-Host "  [1] Run Full Performance Diagnostic Scan (Active Save)" -ForegroundColor White
-        Write-Host "  [2] View Full Stutter & Lag Spike Impact Roster (All Active Mods)" -ForegroundColor White
-        Write-Host "  [3] Scan Dedicated / Multiplayer Server Config (.ini)" -ForegroundColor White
-        Write-Host "  [4] Scan Local Workshop Mods (Zomboid\Workshop)" -ForegroundColor White
-        Write-Host "  [5] One-Click Java GC Optimizer (Apply G1GC + 5ms Pause Tuning)" -ForegroundColor White
-        Write-Host "  [6] Safe Frame Cap Optimizer (Reduce Lua Tick Multiplier)" -ForegroundColor White
-        Write-Host "  [7] Clean Phantom / Missing Mods from Savegame" -ForegroundColor White
-        Write-Host "  [8] Revert Changes / Restore Backups (JVM, FPS, Savegame)" -ForegroundColor Yellow
-        Write-Host "  [9] Open Last Generated Diagnostic Report" -ForegroundColor White
+        Write-Host "  [2] Scan Dedicated / Multiplayer Server Config (.ini)" -ForegroundColor White
+        Write-Host "  [3] Scan Local Workshop Mods (Zomboid\Workshop)" -ForegroundColor White
+        Write-Host "  [4] One-Click Java GC Optimizer (Apply G1GC + 5ms Pause Tuning)" -ForegroundColor White
+        Write-Host "  [5] Safe Frame Cap Optimizer (Reduce Lua Tick Multiplier)" -ForegroundColor White
+        Write-Host "  [6] Clean Phantom / Missing Mods from Savegame" -ForegroundColor White
+        Write-Host "  [7] Revert Changes / Restore Backups (JVM, FPS, Savegame)" -ForegroundColor Yellow
+        Write-Host "  [8] Open Last Generated Diagnostic Report" -ForegroundColor White
         Write-Host "  [0] Exit" -ForegroundColor Gray
         Write-Host "=================================================================" -ForegroundColor Cyan
         
-        $choice = Read-Host " Select an option (0-9)"
+        $choice = Read-Host " Select an option (0-8)"
         switch ($choice.Trim()) {
             "1" {
                 Invoke-PZScanEngine
@@ -1747,11 +1744,6 @@ function Show-PZMainMenu {
                 Read-Host | Out-Null
             }
             "2" {
-                Invoke-PZScanEngine -StutterRosterOnly
-                Write-Host "Press Enter to return to menu..." -ForegroundColor Gray
-                Read-Host | Out-Null
-            }
-            "3" {
                 Write-Host "`nEnter path to server .ini file (or drag and drop it here):" -ForegroundColor Cyan
                 $iniPath = (Read-Host).Trim().Trim('"')
                 if ($iniPath -and (Test-Path $iniPath)) {
@@ -1762,7 +1754,7 @@ function Show-PZMainMenu {
                 Write-Host "Press Enter to return to menu..." -ForegroundColor Gray
                 Read-Host | Out-Null
             }
-            "4" {
+            "3" {
                 $defaultWs = Join-Path $ZomboidUserPath "Workshop"
                 Write-Host "`nLocal Workshop Folder: $defaultWs" -ForegroundColor Cyan
                 Write-Host "Press [Enter] to scan default folder, or enter a custom path:" -ForegroundColor Gray
@@ -1772,12 +1764,12 @@ function Show-PZMainMenu {
                 Write-Host "`nPress Enter to return to menu..." -ForegroundColor Gray
                 Read-Host | Out-Null
             }
-            "5" {
+            "4" {
                 Invoke-PZFixGC
                 Write-Host "`nPress Enter to return to menu..." -ForegroundColor Gray
                 Read-Host | Out-Null
             }
-            "6" {
+            "5" {
                 Write-Host "`nChoose Frame Rate Cap for Project Zomboid:" -ForegroundColor Cyan
                 Write-Host " [1] 60 FPS   (Recommended for heavy 100+ modpacks)" -ForegroundColor White
                 Write-Host " [2] 120 FPS  (Great balance for 120Hz/144Hz displays)" -ForegroundColor White
@@ -1799,12 +1791,12 @@ function Show-PZMainMenu {
                 Write-Host "`nPress Enter to return to menu..." -ForegroundColor Gray
                 Read-Host | Out-Null
             }
-            "7" {
+            "6" {
                 Invoke-PZCleanSaveMods
                 Write-Host "`nPress Enter to return to menu..." -ForegroundColor Gray
                 Read-Host | Out-Null
             }
-            "8" {
+            "7" {
                 Write-Host "`n-----------------------------------------------------------------" -ForegroundColor Cyan
                 Write-Host "   REVERT CHANGES & RESTORE BACKUPS                              " -ForegroundColor Yellow
                 Write-Host "-----------------------------------------------------------------" -ForegroundColor Cyan
@@ -1825,7 +1817,7 @@ function Show-PZMainMenu {
                 Write-Host "`nPress Enter to return to menu..." -ForegroundColor Gray
                 Read-Host | Out-Null
             }
-            "9" {
+            "8" {
                 if (Test-Path $ReportOutputPath) {
                     Start-Process $ReportOutputPath
                 } else {
@@ -1856,13 +1848,11 @@ if ($Revert) {
     Set-PZFrameCap $CapFPS
 } elseif ($CleanSave) {
     Invoke-PZCleanSaveMods
-} elseif ($StutterRoster) {
-    Invoke-PZScanEngine -StutterRosterOnly
 } elseif ($LocalWorkshop) {
     Invoke-PZScanEngine -LocalWorkshopOnly -CustomWorkshopPath $CustomWorkshopPath
 } elseif ($ServerConfigPath) {
     Invoke-PZScanEngine -CustomServerIni $ServerConfigPath
-} elseif ($Auto) {
+} elseif ($Auto -or $StutterRoster) {
     Invoke-PZScanEngine
 } else {
     Show-PZMainMenu
