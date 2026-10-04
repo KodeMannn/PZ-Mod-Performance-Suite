@@ -9,13 +9,14 @@ exit /b
 #>
 <#
 .SYNOPSIS
-    Project Zomboid Mod Performance & Optimization Suite v2.6.1
+    Project Zomboid Mod Performance & Optimization Suite v2.7.0
 .DESCRIPTION
     Comprehensive diagnostic scanner and optimization toolkit for Project Zomboid (Build 42 & 41).
     Features Precision Slow Frame Anatomy Dissection (Main vs Render Thread, GC pauses vs Chunk Cache),
     Causal Bottleneck Attribution (Zero False Mod Accusations), Full Stutter & Lag Spike Impact Roster,
     Hardware & Thread Headroom Telemetry (GPU ms, Render CPU ms, Main Thread ms, Entity Density),
-    Expanded Top Correlated Spike Culprits, Global Modpack Runtime Budget, and 1-Click Engine Tuning.
+    Top 10 Correlated Spike Culprits with Strict Worthiness Filtering, Global Modpack Runtime Budget,
+    and 1-Click Engine Tuning.
 .AUTHOR
     KodeMannn (https://github.com/KodeMannn) - Coded with the assistance of Google Gemini
 #>
@@ -575,17 +576,18 @@ function Get-ModStutterMetrics {
         [int]$throttledHooks,
         [int]$inHookWorldQueries,
         [int]$inHookInvQueries,
-        [int]$riskScore
+        [int]$riskScore,
+        [int]$worldMeshCount = 0
     )
 
     # 1. Potential Spike Duration (ms)
     $spikeMs = "< 1 ms [Imperceptible]"
     $spikeSeverity = "NEGLIGIBLE"
 
-    if ($modId -match "PZVoxelStudioViewpoint" -or $modelCount -gt 5000) {
+    if ($modId -match "PZVoxelStudioViewpoint" -or $worldMeshCount -gt 5000) {
         $spikeMs = "~350-550 ms [Severe Freeze]"
         $spikeSeverity = "CRITICAL"
-    } elseif ($modelCount -gt 1000 -or $textureMB -gt 100) {
+    } elseif ($worldMeshCount -gt 1000 -or $textureMB -gt 100) {
         $spikeMs = "~100-250 ms [Noticeable Hitch]"
         $spikeSeverity = "HIGH"
     } elseif ($modId -match "aparosa_pz3dMinimap") {
@@ -594,7 +596,7 @@ function Get-ModStutterMetrics {
     } elseif ($transHooks -ge 15 -or $modId -match "Journal|Burd") {
         $spikeMs = "~50-150 ms [Action Spike]"
         $spikeSeverity = "HIGH"
-    } elseif ($modId -match "VanillaVehiclesAnimated" -or $modelCount -gt 200) {
+    } elseif ($modId -match "VanillaVehiclesAnimated" -or $worldMeshCount -gt 200) {
         $spikeMs = "~20-60 ms [Micro-Stutter]"
         $spikeSeverity = "MODERATE"
     } elseif ($inHookWorldQueries -ge 5 -or $modId -match "TrueCrawling|Zombie") {
@@ -609,7 +611,15 @@ function Get-ModStutterMetrics {
     }
 
     # 2. Continuous Frame Time Tax (+X.XX ms / frame)
-    $taxRaw = ($permHooks * 0.45) + ($inHookWorldQueries * 0.08) + ($inHookInvQueries * 0.04) + ($throttledHooks * 0.02)
+    # Queries in permanent per-frame loops run continuously; queries in throttled hooks run periodically
+    $queryTax = if ($permHooks -gt 0) {
+        ($inHookWorldQueries * 0.08) + ($inHookInvQueries * 0.04)
+    } elseif ($throttledHooks -gt 0) {
+        ($inHookWorldQueries * 0.015) + ($inHookInvQueries * 0.01)
+    } else {
+        0.0
+    }
+    $taxRaw = ($permHooks * 0.45) + ($throttledHooks * 0.02) + $queryTax
     $taxText = if ($taxRaw -gt 0.01) {
         "+$([math]::Round($taxRaw, 2)) ms/frame"
     } else {
@@ -618,7 +628,7 @@ function Get-ModStutterMetrics {
 
     # 3. Stutter Trigger Scenario
     $trigger = "None (Passive / Static UI)"
-    if ($modId -match "PZVoxelStudioViewpoint" -or $modelCount -ge 1000 -or $textureMB -ge 100) {
+    if ($modId -match "PZVoxelStudioViewpoint" -or $worldMeshCount -ge 1000 -or $textureMB -ge 100) {
         $trigger = "Chunk Border Traversal & High-Speed Driving"
     } elseif ($inHookWorldQueries -ge 5 -or $modId -match "TrueCrawling|Zombie") {
         $trigger = "Horde Proximity & Combat"
@@ -640,12 +650,35 @@ function Get-ModStutterMetrics {
     }
 }
 
+function Test-IsSpikeWorthy($mod) {
+    if (-not $mod) { return $false }
+    if ($mod.PotentialSpike -match '< 1 ms|Imperceptible') { return $false }
+    if ($mod.SpikeSeverity -eq 'NEGLIGIBLE') { return $false }
+    if ($mod.StutterTrigger -eq 'None (Passive / Static UI)') { return $false }
+
+    $hasTax = $false
+    if ($mod.FrameTax -match '\+([\d\.]+)\s*ms/frame') {
+        if ([double]$matches[1] -gt 0.02) { $hasTax = $true }
+    }
+
+    if ($hasTax -or 
+        $mod.PermanentHooks -gt 0 -or 
+        $mod.InHookWorldQueries -gt 0 -or 
+        $mod.ThrottledHooks -gt 0 -or 
+        $mod.WorldMeshCount -ge 200 -or 
+        $mod.TextureMB -ge 50 -or 
+        $mod.RiskScore -ge 15) {
+        return $true
+    }
+    return $false
+}
+
 # ==============================================================================
 # Core Diagnostic Engine
 # ==============================================================================
 function Invoke-PZScanEngine([string]$CustomServerIni = "", [switch]$LocalWorkshopOnly, [string]$CustomWorkshopPath = "") {
     Write-Host "`n=================================================================" -ForegroundColor Cyan
-    Write-Host "   PROJECT ZOMBOID MOD PERFORMANCE & OPTIMIZATION SUITE v2.6.1  " -ForegroundColor Yellow
+    Write-Host "   PROJECT ZOMBOID MOD PERFORMANCE & OPTIMIZATION SUITE v2.7.0  " -ForegroundColor Yellow
     Write-Host "         Created by @KodeMannn with the help of Gemini          " -ForegroundColor DarkCyan
     Write-Host "=================================================================`n" -ForegroundColor Cyan
 
@@ -855,10 +888,16 @@ function Invoke-PZScanEngine([string]$CustomServerIni = "", [switch]$LocalWorksh
         $totalBytes = ($allFiles | Measure-Object -Property Length -Sum).Sum
         $totalMB = [math]::Round($totalBytes / 1MB, 2)
         
-        # 3D models & meshes
-        $modelCount = ($allFiles | Where-Object {
+        # 3D models & meshes: distinguish world/chunk geometry from character skinned meshes
+        $rawModelFiles = @($allFiles | Where-Object {
             $_.Extension -match '\.(txt|fbx|obj|bin)$' -and $_.DirectoryName -match 'models|anims|meshes|vehicles|voxel'
-        }).Count
+        })
+        $modelCount = $rawModelFiles.Count
+        $worldModelFiles = @($rawModelFiles | Where-Object {
+            $_.DirectoryName -notmatch 'skinned|clothing|hair|characters|body|anims' -or $_.DirectoryName -match 'voxel|world|tiles|props|vehicles'
+        })
+        $worldMeshCount = $worldModelFiles.Count
+        $characterMeshCount = $modelCount - $worldMeshCount
 
         # Texture bloat audit (.png, .pack)
         $texFiles = $allFiles | Where-Object { $_.Extension -match '\.(png|pack|dds)$' }
@@ -901,7 +940,7 @@ function Invoke-PZScanEngine([string]$CustomServerIni = "", [switch]$LocalWorksh
         if ($modId -match "PZVoxelStudioViewpoint") {
             $riskScore += 85
             $stutterVerdict = "Severe Chunk Meshing Freezes & Heavy VRAM Load"
-            $riskReasons += "Massive 3D model injection ($modelCount models) causing 400-500ms chunk stalls"
+            $riskReasons += "Massive 3D model injection ($worldMeshCount models) causing 400-500ms chunk stalls"
         }
         if ($modId -match "ZombieDismemberment") {
             $riskScore += 45
@@ -928,10 +967,11 @@ function Invoke-PZScanEngine([string]$CustomServerIni = "", [switch]$LocalWorksh
         $riskScore += [math]::Min(15, [math]::Floor($inHookInvQueries / 2))
         $riskScore += [math]::Min(3, [math]::Floor($staticInvQueries / 50))
 
-        if ($modelCount -gt 5000) { $riskScore += 45 }
-        elseif ($modelCount -gt 1000) { $riskScore += 25 }
-        elseif ($modelCount -gt 100) { $riskScore += 10 }
-        elseif ($modelCount -gt 20) { $riskScore += 5 }
+        if ($worldMeshCount -gt 5000) { $riskScore += 45 }
+        elseif ($worldMeshCount -gt 1000) { $riskScore += 25 }
+        elseif ($worldMeshCount -gt 100) { $riskScore += 10 }
+        elseif ($worldMeshCount -gt 20) { $riskScore += 5 }
+        elseif ($characterMeshCount -gt 500) { $riskScore += 5 }
 
         if ($totalMB -gt 100) { $riskScore += 10 }
         elseif ($totalMB -gt 50) { $riskScore += 5 }
@@ -956,8 +996,8 @@ function Invoke-PZScanEngine([string]$CustomServerIni = "", [switch]$LocalWorksh
         if ($inHookInvQueries -gt 5) {
             $dynamicReasons += "$inHookInvQueries in-hook inventory searches"
         }
-        if ($modelCount -gt 50 -and -not ($riskReasons -match "model")) {
-            $dynamicReasons += "$modelCount custom 3D model definitions"
+        if ($worldMeshCount -gt 50 -and -not ($riskReasons -match "model")) {
+            $dynamicReasons += "$worldMeshCount custom 3D world model definitions"
         }
         if ($totalMB -gt 50 -and -not ($riskReasons -match "Heavy texture pack")) {
             $dynamicReasons += "Large package size ($totalMB MB)"
@@ -1004,7 +1044,8 @@ function Invoke-PZScanEngine([string]$CustomServerIni = "", [switch]$LocalWorksh
             -throttledHooks $throttledHooks `
             -inHookWorldQueries $inHookWorldQueries `
             -inHookInvQueries $inHookInvQueries `
-            -riskScore $riskScore
+            -riskScore $riskScore `
+            -worldMeshCount $worldMeshCount
 
         $modReports += [PSCustomObject]@{
             ModId = $modId
@@ -1024,6 +1065,8 @@ function Invoke-PZScanEngine([string]$CustomServerIni = "", [switch]$LocalWorksh
             SizeMB = $totalMB
             TextureMB = $textureMB
             ModelCount = $modelCount
+            WorldMeshCount = $worldMeshCount
+            CharacterMeshCount = $characterMeshCount
             PotentialSpike = $stutterMetrics.PotentialSpike
             FrameTax = $stutterMetrics.FrameTax
             StutterTrigger = $stutterMetrics.StutterTrigger
@@ -1268,18 +1311,30 @@ function Invoke-PZScanEngine([string]$CustomServerIni = "", [switch]$LocalWorksh
 
     Write-Progress -Activity "Project Zomboid Mod Diagnostic Engine" -Status "Phase 4/4: Correlating Telemetry with Stutter Culprits & Compiling Rankings..." -PercentComplete 95
 
-    $sortedMods = $modReports | Sort-Object -Property RiskScore -Descending
-
-    # Top Correlated Culprit Analysis
-    $topSpikeMods = @($sortedMods | Where-Object { $_.SpikeSeverity -in @("CRITICAL", "HIGH", "MODERATE") } | Select-Object -First 5)
-    if ($topSpikeMods.Count -lt 5) {
-        $needed = 5 - $topSpikeMods.Count
-        $additional = @($sortedMods | Where-Object { $topSpikeMods -notcontains $_ } | Select-Object -First $needed)
-        $topSpikeMods += $additional
+    $severityRank = @{
+        "CRITICAL"   = 1
+        "HIGH"       = 2
+        "MODERATE"   = 3
+        "LOW"        = 4
+        "NEGLIGIBLE" = 5
     }
-    $topVramMods = @($sortedMods | Where-Object { $_.TextureMB -ge 5 } | Sort-Object -Property TextureMB -Descending | Select-Object -First 5)
-    $topMeshMods = @($sortedMods | Where-Object { $_.ModelCount -ge 20 } | Sort-Object -Property ModelCount -Descending | Select-Object -First 5)
-    $topCpuMods = @($sortedMods | Where-Object { $_.PermanentHooks -gt 0 -or $_.InHookWorldQueries -gt 0 } | Sort-Object -Property { ($_.PermanentHooks * 0.45) + ($_.InHookWorldQueries * 0.08) } -Descending | Select-Object -First 5)
+
+    $sortedMods = $modReports | Sort-Object -Property `
+        @{ Expression = { if ($severityRank.ContainsKey($_.SpikeSeverity)) { $severityRank[$_.SpikeSeverity] } else { 99 } } }, `
+        @{ Expression = { 
+            if ($_.PotentialSpike -match '~(\d+)') { [int]$matches[1] } else { 0 }
+        }; Descending = $true }, `
+        @{ Expression = { 
+            if ($_.FrameTax -match '\+([\d\.]+)') { [double]$matches[1] } else { 0.0 }
+        }; Descending = $true }, `
+        @{ Expression = { $_.RiskScore }; Descending = $true }
+
+    # Top Correlated Culprit Analysis (Strictly Worthy Candidates Only)
+    $worthyMods = @($sortedMods | Where-Object { Test-IsSpikeWorthy $_ })
+    $topSpikeMods = @($worthyMods | Select-Object -First 10)
+    $topVramMods = @($sortedMods | Where-Object { $_.TextureMB -ge 10 } | Sort-Object -Property TextureMB -Descending | Select-Object -First 5)
+    $topMeshMods = @($sortedMods | Where-Object { $_.WorldMeshCount -ge 20 -or ($_.ModId -match 'voxel|vehicle' -and $_.ModelCount -ge 20) } | Sort-Object -Property WorldMeshCount -Descending | Select-Object -First 10)
+    $topCpuMods = @($worthyMods | Where-Object { $_.PermanentHooks -gt 0 -or $_.InHookWorldQueries -gt 0 -or $_.ThrottledHooks -gt 0 } | Sort-Object -Property { ($_.PermanentHooks * 0.45) + ($_.InHookWorldQueries * 0.08) + ($_.ThrottledHooks * 0.02) } -Descending | Select-Object -First 10)
 
     # Precision Spike Root Cause & Causal Attribution
     $worstSpikeObj = $null
@@ -1310,34 +1365,30 @@ function Invoke-PZScanEngine([string]$CustomServerIni = "", [switch]$LocalWorksh
             $worstSpikeAttribution = "JVM Heap Garbage Collection. NOT caused by Lua UI or QOL mods."
             $worstSpikeRecommendation = "Apply Menu Option [4] (One-Click G1GC + 5ms Pause Tuning) to eliminate GC freezes."
             if ($wCC -ge 10.0 -or $wBuilds -ge 10) {
-                $worstSpikeCorrelatedMods = @($topMeshMods | Select-Object -First 5)
+                $candidates = @($topMeshMods | Where-Object { Test-IsSpikeWorthy $_ })
+                $extraWorthy = @($worthyMods | Where-Object { $candidates -notcontains $_ })
+                $worstSpikeCorrelatedMods = @($candidates + $extraWorthy | Select-Object -First 10)
             } else {
-                $worstSpikeCorrelatedMods = @($topSpikeMods | Select-Object -First 5)
+                $worstSpikeCorrelatedMods = @($worthyMods | Select-Object -First 10)
             }
         } elseif ($wCC -ge 30.0 -or $wBuilds -ge 20 -or ($wCC / $wTotal) -ge 0.40) {
             $worstSpikeAnatomy = "$wCC ms Chunk Cache Meshing ($ccPct%, $wBuilds builds) | $wRest ms Engine Simulation ($gcPct%)"
             $worstSpikeRootCause = "Dynamic 3D Mesh Compilation on Chunk Traversal"
             $worstSpikeAttribution = "Massive 3D model injections crossing chunk borders."
             $worstSpikeRecommendation = "Trim 3D furniture/model replacement packs to reduce chunk boundary stalls."
-            $worstSpikeCorrelatedMods = @($topMeshMods | Select-Object -First 5)
+            $worstSpikeCorrelatedMods = @($topMeshMods | Where-Object { Test-IsSpikeWorthy $_ } | Select-Object -First 10)
         } elseif ($wTh -eq "render" -and $wRestDet -match "waiting for the main thread") {
             $worstSpikeAnatomy = "$wRest ms Waiting for Main Thread ($gcPct%) | $wOurs ms Render Passes ($ccPct%)"
             $worstSpikeRootCause = "GPU Render Thread Blocked Waiting for CPU Main Thread Tick"
             $worstSpikeAttribution = "Main thread CPU tick budget overflow from excessive per-frame Lua loops."
             $worstSpikeRecommendation = "Lower in-game frame rate cap to 120 FPS (Option [5]) or reduce vehicle fleet mods."
-            $worstSpikeCorrelatedMods = @($topCpuMods | Select-Object -First 5)
+            $worstSpikeCorrelatedMods = @($topCpuMods | Where-Object { Test-IsSpikeWorthy $_ } | Select-Object -First 10)
         } else {
             $worstSpikeAnatomy = "$wRest ms Engine Simulation | $wOurs ms Mod Passes"
             $worstSpikeRootCause = "High Simulation / Combat Burst"
             $worstSpikeAttribution = "Heavy world/zombie queries or entity updates during action."
             $worstSpikeRecommendation = "Review mods with high in-hook entity queries."
-            $worstSpikeCorrelatedMods = @($topSpikeMods | Select-Object -First 5)
-        }
-
-        if ($worstSpikeCorrelatedMods.Count -lt 5) {
-            $needed = 5 - $worstSpikeCorrelatedMods.Count
-            $extras = @($topSpikeMods | Where-Object { $worstSpikeCorrelatedMods -notcontains $_ } | Select-Object -First $needed)
-            $worstSpikeCorrelatedMods += $extras
+            $worstSpikeCorrelatedMods = @($worthyMods | Select-Object -First 10)
         }
     }
 
@@ -1401,10 +1452,11 @@ function Invoke-PZScanEngine([string]$CustomServerIni = "", [switch]$LocalWorksh
         Write-Host "   -> ACTIONABLE FIX  : $worstSpikeRecommendation" -ForegroundColor Cyan
         
         if ($worstSpikeCorrelatedMods.Count -gt 0) {
-            Write-Host "   -> TOP CORRELATED SPIKE CULPRITS:" -ForegroundColor Yellow
+            Write-Host "   -> TOP CORRELATED SPIKE CULPRITS (Up to Top 10 High/Moderate Impact):" -ForegroundColor Yellow
             $cIdx = 0
             foreach ($tsm in $worstSpikeCorrelatedMods) {
                 $cIdx++
+                $idxStr = $cIdx.ToString().PadLeft(2, '0')
                 $modDisplay = $tsm.ModName
                 if ($modDisplay.Length -gt 32) { $modDisplay = $modDisplay.Substring(0, 29) + "..." }
                 $modDisplay = $modDisplay.PadRight(32)
@@ -1412,21 +1464,24 @@ function Invoke-PZScanEngine([string]$CustomServerIni = "", [switch]$LocalWorksh
                 if ($predText.Length -gt 34) { $predText = $predText.Substring(0, 31) + "..." }
                 $predPadded = $predText.PadRight(34)
                 
-                $cColor = switch -Wildcard ($tsm.Tier) {
-                    "*CRITICAL*" { "Red" }
-                    "*HIGH*"     { "Yellow" }
-                    "*MODERATE*" { "DarkYellow" }
+                $cColor = switch ($tsm.SpikeSeverity) {
+                    "CRITICAL"   { "Red" }
+                    "HIGH"       { "Yellow" }
+                    "MODERATE"   { "DarkYellow" }
+                    "LOW"        { "Cyan" }
                     Default      { "DarkYellow" }
                 }
-                Write-Host "      [$cIdx] $modDisplay | $predPadded | $($tsm.StutterTrigger)" -ForegroundColor $cColor
+                Write-Host "      [$idxStr] $modDisplay | $predPadded | $($tsm.StutterTrigger)" -ForegroundColor $cColor
             }
+        } else {
+            Write-Host "   -> TOP CORRELATED SPIKE CULPRITS: None (No active mods exceed stutter thresholds; spike is engine/GC overhead)" -ForegroundColor Green
         }
     }
     if ($maxChunkBuilds -gt 0) {
         $chunkColor = if ($maxChunkBuilds -ge 50) { "Red" } elseif ($maxChunkBuilds -ge 20) { "Yellow" } else { "Gray" }
         Write-Host " Chunk Cache Hitches  : Up to $maxChunkBuilds mesh builds/chunk (Peak rebuild stall: $($maxChunkDuration) ms)" -ForegroundColor $chunkColor
         if ($topMeshMods.Count -gt 0) {
-            $meshCulprits = ($topMeshMods | ForEach-Object { "$($_.ModName) ($($_.ModelCount) meshes)" }) -join ", "
+            $meshCulprits = ($topMeshMods | ForEach-Object { "$($_.ModName) ($($_.WorldMeshCount) world meshes)" }) -join ", "
             Write-Host "   -> Top 3D Meshes   : $meshCulprits" -ForegroundColor DarkYellow
         }
     }
@@ -1495,10 +1550,11 @@ function Invoke-PZScanEngine([string]$CustomServerIni = "", [switch]$LocalWorksh
         $trigger = $mod.StutterTrigger
         if (-not $trigger) { $trigger = "None (Passive / Static UI)" }
         
-        $rowColor = switch -Wildcard ($mod.Tier) {
-            "*CRITICAL*" { "Red" }
-            "*HIGH*"     { "Yellow" }
-            "*MODERATE*" { "DarkYellow" }
+        $rowColor = switch ($mod.SpikeSeverity) {
+            "CRITICAL"   { "Red" }
+            "HIGH"       { "Yellow" }
+            "MODERATE"   { "DarkYellow" }
+            "LOW"        { "Cyan" }
             Default      { "DarkGray" }
         }
         
@@ -1558,7 +1614,7 @@ function Invoke-PZScanEngine([string]$CustomServerIni = "", [switch]$LocalWorksh
     # Generate Markdown Report
     $md = @()
     $md += "# Project Zomboid Mod Performance & Optimization Diagnostic Report"
-    $md += "*Generated: $(Get-Date -Format 'yyyy-MM-dd HH:mm:ss') on $env:COMPUTERNAME by PZ-Mod-Performance-Suite v2.6.1 (Coded with the help of Google Gemini)*"
+    $md += "*Generated: $(Get-Date -Format 'yyyy-MM-dd HH:mm:ss') on $env:COMPUTERNAME by PZ-Mod-Performance-Suite v2.7.0 (Coded with the help of Google Gemini)*"
     $md += ""
     $md += "## Executive Summary"
     $md += "- **Game Version:** $pzVersion"
@@ -1586,6 +1642,8 @@ function Invoke-PZScanEngine([string]$CustomServerIni = "", [switch]$LocalWorksh
         if ($worstSpikeCorrelatedMods.Count -gt 0) {
             $spikeCulpritsMd = ($worstSpikeCorrelatedMods | ForEach-Object { "**$($_.ModName)** ($($_.PotentialSpike))" }) -join "; "
             $md += "  - **Correlated Culprits:** $spikeCulpritsMd"
+        } else {
+            $md += "  - **Correlated Culprits:** None (No active mods exceed stutter thresholds; spike is engine/GC overhead)"
         }
     }
     if ($maxChunkBuilds -gt 0) {
@@ -1611,7 +1669,7 @@ function Invoke-PZScanEngine([string]$CustomServerIni = "", [switch]$LocalWorksh
         $md += "- **Top Correlated VRAM Heavyweights:** $vramCulpritsMd"
     }
     if ($topMeshMods.Count -gt 0) {
-        $meshCulpritsMd = ($topMeshMods | ForEach-Object { "**$($_.ModName)** ($($_.ModelCount) meshes)" }) -join ", "
+        $meshCulpritsMd = ($topMeshMods | ForEach-Object { "**$($_.ModName)** ($($_.WorldMeshCount) world meshes)" }) -join ", "
         $md += "- **Top Correlated 3D Mesh Injectors:** $meshCulpritsMd"
     }
     if ($topCpuMods.Count -gt 0) {
@@ -1658,11 +1716,11 @@ function Invoke-PZScanEngine([string]$CustomServerIni = "", [switch]$LocalWorksh
     $md += "---"
     $md += "## All Active Mods Ranked by Performance Impact"
     $md += ""
-    $md += "| Mod Name | Mod ID | Tier | Score | Predicted Risk (Heuristic) | Frame Tax | Trigger Scenario | Perm Loops | Trans / Throt | Queries (Hook/UI) | Size (MB) | Models | Stutter Verdict |"
+    $md += "| Mod Name | Mod ID | Tier | Score | Predicted Risk (Heuristic) | Frame Tax | Trigger Scenario | Perm Loops | Trans / Throt | Queries (Hook/UI) | Size (MB) | World Meshes | Stutter Verdict |"
     $md += "|:---|:---|:---:|:---:|:---:|:---:|:---|:---:|:---:|:---:|:---:|:---:|:---|"
     foreach ($m in $sortedMods) {
         $mId = $m.ModId
-        $md += "| $($m.ModName) | $mId | $($m.Tier) | $($m.RiskScore) | $($m.PotentialSpike) | $($m.FrameTax) | $($m.StutterTrigger) | $($m.PermanentHooks) | $($m.TransientHooks) / $($m.ThrottledHooks) | $($m.InHookWorldQueries) / $($m.StaticWorldQueries) | $($m.SizeMB) | $($m.ModelCount) | $($m.Verdict) |"
+        $md += "| $($m.ModName) | $mId | $($m.Tier) | $($m.RiskScore) | $($m.PotentialSpike) | $($m.FrameTax) | $($m.StutterTrigger) | $($m.PermanentHooks) | $($m.TransientHooks) / $($m.ThrottledHooks) | $($m.InHookWorldQueries) / $($m.StaticWorldQueries) | $($m.SizeMB) | $($m.WorldMeshCount) | $($m.Verdict) |"
     }
 
     if ($collisions.Count -gt 0) {
@@ -1722,7 +1780,7 @@ function Show-PZMainMenu {
     while ($true) {
         Clear-Host
         Write-Host "=================================================================" -ForegroundColor Cyan
-        Write-Host "   PROJECT ZOMBOID MOD PERFORMANCE & OPTIMIZATION SUITE v2.6.1  " -ForegroundColor Yellow
+        Write-Host "   PROJECT ZOMBOID MOD PERFORMANCE & OPTIMIZATION SUITE v2.7.0  " -ForegroundColor Yellow
         Write-Host "         Created by @KodeMannn with the help of Gemini          " -ForegroundColor DarkCyan
         Write-Host "=================================================================" -ForegroundColor Cyan
         Write-Host "  [1] Run Full Performance Diagnostic Scan (Active Save)" -ForegroundColor White

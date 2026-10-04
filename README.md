@@ -75,9 +75,9 @@ PZ-Mod-Performance-Suite features 8 selectable operations to fit your workflow:
 
 ## 🔍 Key Features
 
-* **⚡ Ultra-Fast Multi-Library Workshop Indexing:** Finds mods across all Steam drives (`C:`, `D:`, `E:`, `H:`, external NVMe SSDs) via `libraryfolders.vdf`.
-* **📋 Full Stutter & Lag Spike Impact Roster (v2.6.0):** Clean, 1-line tabular roster displaying every active mod with predicted frame spike bounds, severity status, and exact gameplay trigger events. Replaces visual clutter with unified per-row severity colors (Red for Tier 1, Yellow for Tier 2, DarkYellow for Tier 3, DarkGray for Tier 4).
-* **🎯 Expanded Top 5 Correlated Spike Culprits (v2.6.0):** Deeply correlates recorded engine slow frames across the top 5 contributing mods with actionable root cause attribution.
+* **📋 Full Stutter & Lag Spike Impact Roster (v2.7.0):** Clean, 1-line tabular roster displaying every active mod with predicted frame spike bounds, severity status, and exact gameplay trigger events. Replaces visual clutter with unified per-row severity colors (Red for CRITICAL, Yellow for HIGH, DarkYellow for MODERATE, Cyan for LOW, and DarkGray for NEGLIGIBLE). Sorted by impact severity and latency so passive mods always rest at the bottom.
+* **🎯 Top 10 Correlated Spike Culprits with Worthiness Filter (v2.7.0):** Deeply correlates recorded engine slow frames across up to the Top 10 highest-impact mods. Implements a strict worthiness filter (`Test-IsSpikeWorthy`) that rejects harmless cosmetic packs and passive `< 1 ms` mods, completely eliminating blind padding.
+* **🧱 World / Chunk Geometry vs. Character Skinned Mesh Differentiation (v2.7.0):** Accurately distinguishes world tile/chunk geometry and vehicle meshes (`media/voxel-studio/`, `models_X/World`, vehicle definitions) from character attachments (`media/clothing`, `models_X/Skinned`, hair). Character cosmetic mods are never falsely accused of causing chunk cache rebuild stalls or given unfair risk penalties.
 * **🩺 Precision Slow Frame Anatomy Dissection (v2.5.0):** Dissects every slow-frame log line in Build 42 into its component sub-stalls:
   * **Main vs. Render Thread Origin:** Distinguishes CPU simulation freezes from GPU draw stalls.
   * **Java GC Pauses vs. Chunk Meshing:** Measures the exact millisecond pause caused by JVM garbage collection sweeps (`the collector's pauses`) versus geometry compilation (`chunk cache builds`).
@@ -85,10 +85,10 @@ PZ-Mod-Performance-Suite features 8 selectable operations to fit your workflow:
 * **🛡️ Causal Bottleneck Filtering (Zero False Mod Accusations):** Prevents innocent Lua UI or QOL mods from being falsely blamed for world hitches. If an engine freeze is caused by Java GC sweeps or chunk meshing, the suite attributes the stall directly to JVM memory or 3D mesh packs, keeping QOL mod ratings clean and accurate.
 * **⏱️ Hardware Frame Times & Simulation Headroom:** Extracts real-time GPU render times, Render CPU frame times, and Main Thread simulation duration (`main thread frame 9.70 ms -> 103 FPS headroom`) alongside active loaded zombie counts.
 * **🔗 Multi-Culprit Telemetry Correlation Engine:** Deeply correlates recorded engine telemetry from `console.txt` across multiple bottleneck vectors:
-  * **Frame Hitch Culprits:** Identifies and ranks the top 5 mods contributing to the worst recorded frame spike with predicted freeze durations and trigger events.
-  * **GPU VRAM Thrashing Attributions:** Identifies the top 5 texture heavyweights responsible for saturated VRAM and PCIe bus paging freezes.
-  * **Chunk Cache Hitching:** Surfacing the top 5 3D mesh injectors causing chunk rebuild stalls during world traversal.
-  * **Continuous CPU Tick Drag:** Isolates the top 5 mods burning frame budget every single tick.
+  * **Frame Hitch Culprits:** Identifies and ranks up to the top 10 worthy mods contributing to the worst recorded frame spike with predicted freeze durations and trigger events.
+  * **GPU VRAM Thrashing Attributions:** Identifies the top texture heavyweights responsible for saturated VRAM and PCIe bus paging freezes.
+  * **Chunk Cache Hitching:** Surfacing only legitimate world 3D mesh injectors causing chunk rebuild stalls during world traversal.
+  * **Continuous CPU Tick Drag:** Isolates the top mods burning frame budget every single tick, accurately scaling queries in throttled/periodic hooks.
 * **⏳ Seamless Multi-Phase Loading Bar:** Features an end-to-end 4-phase progress indicator (Mod Auditing $\rightarrow$ Collision Classification $\rightarrow$ Telemetry Parsing $\rightarrow$ Correlation Synthesis & Ranking) that keeps the console responsive with zero visual freeze before displaying results.
 * **🌐 Global Modpack Runtime Budget & Loop Density Engine:** Solves the elusive "death by 1,000 cuts" where 50+ lightweight mods cumulatively overflow CPU frame budgets. Aggregates total persistent CPU tax (+ms/frame), counts active per-frame loops across the entire modpack, and fires High Loop Density alerts.
 * **🏎️ Mass Vehicle Fleet Stacking Aggregator:** Flags when players accumulate 15+ vehicle mods running per-frame tachometer/speedometer loops (e.g. `DorothyAnemometer`), revealing cumulative frame tax (+6.75 ms/frame) and thousands of loaded vehicle meshes.
@@ -146,7 +146,7 @@ PZ-Mod-Performance-Suite features 8 selectable operations to fit your workflow:
 ```text
 
 =================================================================
-   PROJECT ZOMBOID MOD PERFORMANCE & OPTIMIZATION SUITE v2.6.1  
+   PROJECT ZOMBOID MOD PERFORMANCE & OPTIMIZATION SUITE v2.7.0  
          Created by @KodeMannn with the help of Gemini          
 =================================================================
 
