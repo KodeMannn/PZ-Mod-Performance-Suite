@@ -1,6 +1,6 @@
 <#
 .SYNOPSIS
-    Project Zomboid Mod Performance & Optimization Suite v2.2.0
+    Project Zomboid Mod Performance & Optimization Suite v2.2.1
 .DESCRIPTION
     Comprehensive diagnostic scanner and optimization toolkit for Project Zomboid (Build 42 & 41).
     Features Potential Frame Spike & Stutter Prediction (ms), Continuous Frame Time Tax (+ms/frame),
@@ -634,7 +634,7 @@ function Get-ModStutterMetrics {
 # ==============================================================================
 function Invoke-PZScanEngine([string]$CustomServerIni = "", [switch]$LocalWorkshopOnly, [string]$CustomWorkshopPath = "") {
     Write-Host "`n=================================================================" -ForegroundColor Cyan
-    Write-Host "   PROJECT ZOMBOID MOD PERFORMANCE & OPTIMIZATION SUITE v2.2.0  " -ForegroundColor Yellow
+    Write-Host "   PROJECT ZOMBOID MOD PERFORMANCE & OPTIMIZATION SUITE v2.2.1  " -ForegroundColor Yellow
     Write-Host "         Created by @KodeMannn with the help of Gemini          " -ForegroundColor DarkCyan
     Write-Host "=================================================================`n" -ForegroundColor Cyan
 
@@ -1085,10 +1085,16 @@ function Invoke-PZScanEngine([string]$CustomServerIni = "", [switch]$LocalWorksh
     # Parse runtime logs
     $consoleLog = Join-Path $ZomboidUserPath "console.txt"
     $slowFrames = @()
-    $gcPauses = @()
     $vramReport = "N/A"
     $heapReport = "N/A"
     $frameCap = "Unknown"
+    $totalYoungCount = 0
+    $totalYoungMs = 0
+    $totalOldCount = 0
+    $totalOldMs = 0
+    $totalConcCount = 0
+    $totalConcMs = 0
+    $hasGcTelemetry = $false
 
     if (Test-Path $consoleLog) {
         $logLines = Get-Content $consoleLog -ErrorAction SilentlyContinue
@@ -1101,8 +1107,21 @@ function Invoke-PZScanEngine([string]$CustomServerIni = "", [switch]$LocalWorksh
                     Line = $line
                 }
             }
-            if ($line -match "collector's pauses") {
-                $gcPauses += $line
+            if ($line -match '\|\s*gc\s+([^\|]+)\|') {
+                $hasGcTelemetry = $true
+                $str = $matches[1].Trim()
+                if ($str -match 'Young Generation (\d+) in (\d+) ms') {
+                    $totalYoungCount += [int]$matches[1]
+                    $totalYoungMs += [int]$matches[2]
+                }
+                if ($str -match 'Old Generation (\d+) in (\d+) ms') {
+                    $totalOldCount += [int]$matches[1]
+                    $totalOldMs += [int]$matches[2]
+                }
+                if ($str -match 'Concurrent GC (\d+) in (\d+) ms') {
+                    $totalConcCount += [int]$matches[1]
+                    $totalConcMs += [int]$matches[2]
+                }
             }
             if ($line -match 'video memory MiB free (\d+) of (\d+)') {
                 $vramReport = "$($matches[1]) MB free of $($matches[2]) MB"
@@ -1113,6 +1132,22 @@ function Invoke-PZScanEngine([string]$CustomServerIni = "", [switch]$LocalWorksh
             if ($line -match 'frame cap:\s*game\s*(\d+)\s*fps') {
                 $frameCap = "$($matches[1]) FPS"
             }
+        }
+    }
+
+    $gcReport = "No GC stalls logged"
+    $gcColor = "Green"
+    if ($hasGcTelemetry) {
+        if ($totalOldCount -gt 0) {
+            $gcReport = "$totalOldCount Old Gen Freezes ($totalOldMs ms) | Young Gen: $totalYoungCount sweeps"
+            $gcColor = "Red"
+        } elseif ($totalYoungCount -gt 0) {
+            $yAvg = [math]::Round($totalYoungMs / $totalYoungCount, 1)
+            $gcReport = "0 Old Gen Freezes | Young Gen: $totalYoungCount sweeps (avg $yAvg ms, $totalYoungMs ms total)"
+            $gcColor = "Green"
+        } else {
+            $gcReport = "0 Freezes (JVM heap stable)"
+            $gcColor = "Green"
         }
     }
 
@@ -1134,6 +1169,7 @@ function Invoke-PZScanEngine([string]$CustomServerIni = "", [switch]$LocalWorksh
     Write-Host " Configured Frame Cap : $optionsFps (Active: $frameCap)" -ForegroundColor White
     Write-Host " GPU VRAM Usage       : $vramReport" -ForegroundColor White
     Write-Host " Java Heap Allocation : $heapReport" -ForegroundColor White
+    Write-Host " JVM Garbage Collector: $gcReport" -ForegroundColor $gcColor
     Write-Host " Slow Frames (>50ms)  : $($slowFrames.Count) recorded in last session" -ForegroundColor $(if ($slowFrames.Count -gt 0) { "Red" } else { "Green" })
     if ($slowFrames.Count -gt 0) {
         $maxSlow = ($slowFrames | Measure-Object -Property DurationMs -Maximum).Maximum
@@ -1144,7 +1180,6 @@ function Invoke-PZScanEngine([string]$CustomServerIni = "", [switch]$LocalWorksh
             Write-Host "   -> CORRELATION    : Strongly correlates with [$($topSpikeMod.ModName)] (predicted: $($topSpikeMod.PotentialSpike))" -ForegroundColor Yellow
         }
     }
-    Write-Host " GC Freeze Pauses     : $($gcPauses.Count) collector pauses logged" -ForegroundColor $(if ($gcPauses.Count -gt 0) { "Yellow" } else { "Green" })
     Write-Host " File Override Clashes: $($collisions.Count) detected ($($safeCollisions.Count) Safe, $($riskyCollisions.Count) High/Moderate Risk)" -ForegroundColor $(if ($riskyCollisions.Count -gt 0) { "Red" } elseif ($collisions.Count -gt 0) { "Green" } else { "Green" })
 
     Write-Host "`n-----------------------------------------------------------------" -ForegroundColor Gray
@@ -1221,7 +1256,7 @@ function Invoke-PZScanEngine([string]$CustomServerIni = "", [switch]$LocalWorksh
     # Generate Markdown Report
     $md = @()
     $md += "# Project Zomboid Mod Performance & Optimization Diagnostic Report"
-    $md += "*Generated: $(Get-Date -Format 'yyyy-MM-dd HH:mm:ss') on $env:COMPUTERNAME by PZ-Mod-Performance-Suite v2.2.0 (Coded with the help of Google Gemini)*"
+    $md += "*Generated: $(Get-Date -Format 'yyyy-MM-dd HH:mm:ss') on $env:COMPUTERNAME by PZ-Mod-Performance-Suite v2.2.1 (Coded with the help of Google Gemini)*"
     $md += ""
     $md += "## Executive Summary"
     $md += "- **Game Version:** $pzVersion"
@@ -1233,6 +1268,7 @@ function Invoke-PZScanEngine([string]$CustomServerIni = "", [switch]$LocalWorksh
     $md += "- **Configured Frame Cap:** $optionsFps (Active: $frameCap)"
     $md += "- **VRAM Free:** $vramReport"
     $md += "- **Worst Recorded Hitch:** $(if ($slowFrames.Count -gt 0) { "$maxSlow ms" } else { "None" })"
+    $md += "- **JVM Garbage Collector:** $gcReport"
     $md += "- **Direct File Override Clashes:** $($collisions.Count) total ($($safeCollisions.Count) Safe, $($riskyCollisions.Count) High/Moderate Risk)"
     $md += ""
     $md += "---"
@@ -1327,7 +1363,7 @@ function Show-PZMainMenu {
     while ($true) {
         Clear-Host
         Write-Host "=================================================================" -ForegroundColor Cyan
-        Write-Host "   PROJECT ZOMBOID MOD PERFORMANCE & OPTIMIZATION SUITE v2.2.0  " -ForegroundColor Yellow
+        Write-Host "   PROJECT ZOMBOID MOD PERFORMANCE & OPTIMIZATION SUITE v2.2.1  " -ForegroundColor Yellow
         Write-Host "         Created by @KodeMannn with the help of Gemini          " -ForegroundColor DarkCyan
         Write-Host "=================================================================" -ForegroundColor Cyan
         Write-Host "  [1] Run Full Performance Diagnostic Scan (Active Save)" -ForegroundColor White

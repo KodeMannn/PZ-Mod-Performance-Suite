@@ -122,7 +122,7 @@ PZ-Mod-Performance-Suite features 8 selectable operations to fit your workflow:
 
 ```text
 =================================================================
-   PROJECT ZOMBOID MOD PERFORMANCE & OPTIMIZATION SUITE v2.2.0  
+   PROJECT ZOMBOID MOD PERFORMANCE & OPTIMIZATION SUITE v2.2.1  
          Created by @KodeMannn with the help of Gemini          
 =================================================================
 
@@ -138,10 +138,10 @@ PZ-Mod-Performance-Suite features 8 selectable operations to fit your workflow:
  Configured Frame Cap : 240 FPS (Active: 240 FPS)
  GPU VRAM Usage       : 839 MB free of 12282 MB
  Java Heap Allocation : 8689 MB used of 12800 MB
+ JVM Garbage Collector: 0 Old Gen Freezes | Young Gen: 97 sweeps (avg 8.3 ms, 802 ms total)
  Slow Frames (>50ms)  : 91 recorded in last session
  Worst Frame Spike    : 524 ms
    -> CORRELATION    : Strongly correlates with [6258 3D models for Viewpoint] (predicted: ~350-550 ms [Severe Freeze])
- GC Freeze Pauses     : 91 collector pauses logged
  File Override Clashes: 161 detected (159 Safe, 2 High/Moderate Risk)
 
 -----------------------------------------------------------------
