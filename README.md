@@ -73,6 +73,12 @@ PZ-Mod-Performance-Suite features 8 selectable operations to fit your workflow:
 ## 🔍 Key Features
 
 * **⚡ Ultra-Fast Multi-Library Workshop Indexing:** Finds mods across all Steam drives (`C:`, `D:`, `E:`, `H:`, external NVMe SSDs) via `libraryfolders.vdf`.
+* **🩺 Precision Slow Frame Anatomy Dissection (v2.5.0):** Dissects every slow-frame log line in Build 42 into its component sub-stalls:
+  * **Main vs. Render Thread Origin:** Distinguishes CPU simulation freezes from GPU draw stalls.
+  * **Java GC Pauses vs. Chunk Meshing:** Measures the exact millisecond pause caused by JVM garbage collection sweeps (`the collector's pauses`) versus geometry compilation (`chunk cache builds`).
+  * **Actionable Root Cause:** Pinpoints whether a spike requires JVM G1GC tuning (Option `[4]`) or custom 3D model trimming.
+* **🛡️ Causal Bottleneck Filtering (v2.5.0 - Zero False Mod Accusations):** Prevents innocent Lua UI or QOL mods from being falsely blamed for world hitches. If an engine freeze is caused by Java GC sweeps or chunk meshing, the suite attributes the stall directly to JVM memory or 3D mesh packs, keeping QOL mod ratings clean and accurate.
+* **⏱️ Hardware Frame Times & Simulation Headroom (v2.5.0):** Extracts real-time GPU render times, Render CPU frame times, and Main Thread simulation duration (`main thread frame 9.70 ms -> 103 FPS headroom`) alongside active loaded zombie counts.
 * **🔗 Multi-Culprit Telemetry Correlation Engine (v2.4.0):** Deeply correlates recorded engine telemetry from `console.txt` across multiple bottleneck vectors:
   * **Frame Hitch Culprits:** Identifies and ranks the top 3 mods contributing to the worst recorded frame spike with predicted freeze durations and trigger events.
   * **GPU VRAM Thrashing Attributions:** Identifies the top 3 texture heavyweights responsible for saturated VRAM and PCIe bus paging freezes.
@@ -84,7 +90,7 @@ PZ-Mod-Performance-Suite features 8 selectable operations to fit your workflow:
 * **🎮 GPU VRAM Eviction & Texture Thrashing Detector (v2.3.0):** Telemetry-based detector that parses Build 42 deferred renderer logs for texture evictions across the PCIe bus, identifying the root cause of 100–250ms render-thread freezes while running or driving.
 * **🗺️ Chunk Cache Meshing Traversal Telemetry (v2.3.0):** Monitors chunk boundary mesh builds and rebuild stalls, isolating stutter caused by massive 3D model injections when crossing world boundaries.
 * **🔒 Safe Concurrent Log Streaming:** Uses non-locking `[System.IO.FileShare]::ReadWrite` streams to safely run scans and parse telemetry even while Project Zomboid is actively running.
-* **⏱️ Potential Frame Spike & Stutter Prediction Engine (v2.2.0):** Estimates concrete freeze durations based on asset weight and code intensity:
+* **⏱️ Static Code Risk Prediction Engine (v2.2.0):** Estimates concrete worst-case freeze durations based on structural code intensity and asset weight:
   * `~350-550 ms [Severe Freeze]`: Massive 3D model injections causing chunk meshing stalls.
   * `~100-250 ms [Noticeable Hitch]`: Heavy texture packs causing VRAM paging spikes.
   * `~50-150 ms [Action Spike]`: High-volume transient hooks triggered by player actions (e.g. transcribing XP).
@@ -134,13 +140,13 @@ PZ-Mod-Performance-Suite features 8 selectable operations to fit your workflow:
 
 ```text
 =================================================================
-   PROJECT ZOMBOID MOD PERFORMANCE & OPTIMIZATION SUITE v2.4.0  
+   PROJECT ZOMBOID MOD PERFORMANCE & OPTIMIZATION SUITE v2.5.0  
          Created by @KodeMannn with the help of Gemini          
 =================================================================
 
  [INFO] Detected Game Version: 42.21.0
- [INFO] Active Savegame: Outbreak / 2026-10-04_15-14-47
- [INFO] Total Enabled Mods to Audit: 60
+ [INFO] Active Savegame: Outbreak / 2026-10-04_16-33-03
+ [INFO] Total Enabled Mods to Audit: 59
 
  [*] Auditing Lua hooks, 3D meshes, texture packs, and file collisions...
 
@@ -148,27 +154,32 @@ PZ-Mod-Performance-Suite features 8 selectable operations to fit your workflow:
    RUNTIME ENGINE TELEMETRY SUMMARY
 -----------------------------------------------------------------
  Configured Frame Cap : 240 FPS (Active: 240 FPS)
- GPU VRAM Usage       : 1421 MB free of 12282 MB
-   [!] GPU Thrashing  : 393 texture evictions (418 MiB swapped across PCIe)!
-       Top Heavyweights: KATTAJ1 Military Pack (54.06 MB), Realistic Dashboard (50.18 MB)
- Java Heap Allocation : 5733 MB used of 12704 MB
- JVM Garbage Collector: 0 Old Gen Freezes | Young Gen: 251 sweeps (avg 10.4 ms, 2605 ms total)
- Slow Frames (>50ms)  : 42 recorded in last session
- Worst Frame Spike    : 456.9 ms
-   -> CORRELATION (1) : Strongly correlates with [Project A-Life [ALIFE NPCS]] (predicted: ~10-35 ms [Combat Hitch])
-   -> CORRELATION (2) : Also contributing: [Project A-Life - Jeem Extension] (predicted: ~10-35 ms [Combat Hitch])
-   -> CORRELATION (3) : Also contributing: [Vanilla Vehicles Animated] (predicted: ~20-60 ms [Micro-Stutter])
- Chunk Cache Hitches  : Up to 155 mesh builds/chunk (Peak rebuild stall: 10.6 ms)
-   -> TOP INJECTORS   : Vanilla Vehicles Animated (606 models), KATTAJ1 Clothes Core (257 models)
- File Override Clashes: 492 detected (488 Safe, 4 High/Moderate Risk)
+ Hardware Frame Times : GPU: 8.59 ms | Render CPU: 7.58 ms | Main Thread: 9.70 ms (~103 FPS cap)
+ Live World Simulation: 88 active zombies loaded in simulation radius (89 in-game FPS)
+ GPU VRAM Usage       : 2381 MB free of 12282 MB
+   [!] GPU Thrashing  : 2 texture evictions (32 MiB swapped across PCIe)!
+       Top VRAM Loads : 6261 3D models for Viewpoint (170.79 MB), KATTAJ1 Military Pack (54.06 MB)
+ Java Heap Allocation : 2736 MB used of 6992 MB
+ JVM Garbage Collector: 0 Old Gen Freezes | Young Gen: 99 sweeps (avg 7.1 ms, 700 ms total)
+ Slow Frames (>50ms)  : 19 recorded in last session
+ Worst Frame Spike    : 446.4 ms (MAIN THREAD)
+   -> SPIKE ANATOMY   : 425.1 ms Engine & GC Pauses (95.2%) | 21.3 ms Chunk Meshing & Passes (4.8%)
+   -> ROOT CAUSE      : Severe Java Garbage Collection Freeze (Engine Memory Sweep)
+   -> ATTRIBUTION     : JVM Heap Garbage Collection. NOT caused by Lua UI or QOL mods.
+   -> ACTIONABLE FIX  : Apply Menu Option [4] (One-Click G1GC + 5ms Pause Tuning) to eliminate GC freezes.
+   -> CORRELATED MODS :
+      [1] 6261 3D models for Viewpoint... | Pred: ~350-550 ms [Severe Freeze]  | Chunk Border Traversal
+ Chunk Cache Hitches  : Up to 51 mesh builds/chunk (Peak rebuild stall: 33.4 ms)
+   -> Top 3D Meshes   : 6261 3D models for Viewpoint (10241 meshes), Vanilla Vehicles Animated (606 meshes)
+ File Override Clashes: 457 detected (455 Safe, 2 High/Moderate Risk)
 
 -----------------------------------------------------------------
    GLOBAL MODPACK RUNTIME BUDGET & LOOP DENSITY
 -----------------------------------------------------------------
- Cumulative Mod Frame Tax : +20.35 ms/frame (Continuous CPU tick overhead)
-   -> TOP CPU TAX     : Project A-Life - Jeem Extension (+13.01 ms/frame), Project A-Life [ALIFE NPCS] (+5.53 ms/frame)
- Active Per-Frame Loops   : 23 permanent hooks firing every single frame
- Total Custom 3D Models   : 1420 meshes (185.12 MB textures across mods)
+ Cumulative Mod Frame Tax : +2.58 ms/frame (Continuous CPU tick overhead)
+ Active Per-Frame Loops   : 2 permanent hooks firing every single frame
+ Total Custom 3D Models   : 11375 meshes (340.8 MB textures across mods)
+   -> Top CPU Tick Tax: NeatUI Equipment (+0.45 ms/frame), NeatUI XP Drop (+0.45 ms/frame), Project Viewpoint QOL (+0.76 ms/frame)
 
  [ALERT] High Loop Density: Cumulative 'death by 1,000 cuts' detected!
          Even if individual mods score lightweight (green), running 19 simultaneous

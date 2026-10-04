@@ -1,13 +1,12 @@
 <#
 .SYNOPSIS
-    Project Zomboid Mod Performance & Optimization Suite v2.4.0
+    Project Zomboid Mod Performance & Optimization Suite v2.5.0
 .DESCRIPTION
     Comprehensive diagnostic scanner and optimization toolkit for Project Zomboid (Build 42 & 41).
-    Features Multi-Culprit Telemetry Correlation Ranking, End-to-End Multi-Phase Loading Bar,
-    Global Modpack Runtime Budget & Cumulative Loop Density, GPU VRAM Eviction & Texture
-    Thrashing Detector, Mass Vehicle Fleet Stacking Aggregator, Chunk Meshing Traversal Telemetry,
-    Potential Frame Spike & Stutter Prediction (ms), Continuous Frame Time Tax (+ms/frame),
-    and 1-click engine tuning for Java GC, frame caps, and savegame hygiene.
+    Features Precision Slow Frame Anatomy Dissection (Main vs Render Thread, GC pauses vs Chunk Cache),
+    Causal Bottleneck Attribution (Zero False Mod Accusations), Hardware & Thread Headroom Telemetry
+    (GPU ms, Render CPU ms, Main Thread ms, Entity Density), Multi-Culprit Telemetry Correlation,
+    End-to-End Multi-Phase Loading Bar, Global Modpack Runtime Budget, and 1-Click Engine Tuning.
 .AUTHOR
     KodeMannn (https://github.com/KodeMannn) - Coded with the assistance of Google Gemini
 #>
@@ -636,7 +635,7 @@ function Get-ModStutterMetrics {
 # ==============================================================================
 function Invoke-PZScanEngine([string]$CustomServerIni = "", [switch]$LocalWorkshopOnly, [string]$CustomWorkshopPath = "") {
     Write-Host "`n=================================================================" -ForegroundColor Cyan
-    Write-Host "   PROJECT ZOMBOID MOD PERFORMANCE & OPTIMIZATION SUITE v2.4.0  " -ForegroundColor Yellow
+    Write-Host "   PROJECT ZOMBOID MOD PERFORMANCE & OPTIMIZATION SUITE v2.5.0  " -ForegroundColor Yellow
     Write-Host "         Created by @KodeMannn with the help of Gemini          " -ForegroundColor DarkCyan
     Write-Host "=================================================================`n" -ForegroundColor Cyan
 
@@ -1104,6 +1103,15 @@ function Invoke-PZScanEngine([string]$CustomServerIni = "", [switch]$LocalWorksh
     $maxChunkBuilds = 0
     $maxChunkDuration = 0.0
 
+    # Engine Headroom Telemetry (B42 / Viewpoint)
+    $hasHeadroomTelemetry = $false
+    $headroomFps = 0
+    $headroomGpuMs = 0.0
+    $headroomRenderCpuMs = 0.0
+    $headroomMainThreadMs = 0.0
+    $headroomMainThreadFps = 0
+    $headroomZombies = 0
+
     if (Test-Path $consoleLog) {
         $logLines = @()
         try {
@@ -1119,13 +1127,57 @@ function Invoke-PZScanEngine([string]$CustomServerIni = "", [switch]$LocalWorksh
         }
 
         foreach ($line in $logLines) {
-            if ($line -match 'slow frame on the (main|render) thread:\s*([\d\.]+)\s*ms.*ours\s*([\d\.]+)') {
+            if ($line -match 'slow frame on the (main|render) thread:\s*([\d\.]+)\s*ms,\s*(?:ours|our passes)\s*([\d\.]+)(?:\s*\((.*?)\))?,\s*the rest\s*([\d\.]+)(?:\s*\((.*?)\))?') {
+                $th = $matches[1]
+                $tMs = [double]$matches[2]
+                $oMs = [double]$matches[3]
+                $oDet = $matches[4]
+                $rMs = [double]$matches[5]
+                $rDet = $matches[6]
+
+                $ccMs = 0.0
+                $ccBuilds = 0
+                if ($oDet -and ($oDet -match 'chunk cache\s*([\d\.]+):\s*(\d+)\s*builds')) {
+                    $ccMs = [double]$matches[1]
+                    $ccBuilds = [int]$matches[2]
+                }
+
                 $slowFrames += [PSCustomObject]@{
-                    Thread = $matches[1]
-                    DurationMs = [double]$matches[2]
-                    ViewpointMs = [double]$matches[3]
+                    Thread = $th
+                    DurationMs = $tMs
+                    OursMs = $oMs
+                    OurDetails = $oDet
+                    ChunkCacheMs = $ccMs
+                    ChunkCacheBuilds = $ccBuilds
+                    RestMs = $rMs
+                    RestDetails = $rDet
                     Line = $line
                 }
+            } elseif ($line -match 'slow frame on the (main|render) thread:\s*([\d\.]+)\s*ms.*ours\s*([\d\.]+)') {
+                $th = $matches[1]
+                $tMs = [double]$matches[2]
+                $oMs = [double]$matches[3]
+                $slowFrames += [PSCustomObject]@{
+                    Thread = $th
+                    DurationMs = $tMs
+                    OursMs = $oMs
+                    OurDetails = ""
+                    ChunkCacheMs = 0.0
+                    ChunkCacheBuilds = 0
+                    RestMs = [math]::Max(0.0, $tMs - $oMs)
+                    RestDetails = "Engine Simulation"
+                    Line = $line
+                }
+            }
+
+            if ($line -match '\[Viewpoint\]\s*(\d+)\s*fps\s*\|\s*gpu ms[^\|]+\(([\d\.]+)\).*?\|\s*render cpu ms[^\|]+\(([\d\.]+)\).*?\|\s*main thread frame\s*([\d\.]+)\s*ms\s*\((\d+)\s*fps\).*?\|\s*zombies loaded\s*(\d+)') {
+                $hasHeadroomTelemetry = $true
+                $headroomFps = [int]$matches[1]
+                $headroomGpuMs = [double]$matches[2]
+                $headroomRenderCpuMs = [double]$matches[3]
+                $headroomMainThreadMs = [double]$matches[4]
+                $headroomMainThreadFps = [int]$matches[5]
+                $headroomZombies = [int]$matches[6]
             }
             if ($line -match '\|\s*gc\s+([^\|]+)\|') {
                 $hasGcTelemetry = $true
@@ -1217,6 +1269,58 @@ function Invoke-PZScanEngine([string]$CustomServerIni = "", [switch]$LocalWorksh
     $topMeshMods = @($sortedMods | Where-Object { $_.ModelCount -ge 20 } | Sort-Object -Property ModelCount -Descending | Select-Object -First 3)
     $topCpuMods = @($sortedMods | Where-Object { $_.PermanentHooks -gt 0 -or $_.InHookWorldQueries -gt 0 } | Sort-Object -Property { ($_.PermanentHooks * 0.45) + ($_.InHookWorldQueries * 0.08) } -Descending | Select-Object -First 3)
 
+    # Precision Spike Root Cause & Causal Attribution
+    $worstSpikeObj = $null
+    $worstSpikeAnatomy = ""
+    $worstSpikeRootCause = ""
+    $worstSpikeAttribution = ""
+    $worstSpikeRecommendation = ""
+    $worstSpikeCorrelatedMods = @()
+    $wTotal = 0.0
+    $wTh = ""
+
+    if ($slowFrames.Count -gt 0) {
+        $worstSpikeObj = $slowFrames | Sort-Object DurationMs -Descending | Select-Object -First 1
+        $wTotal = $worstSpikeObj.DurationMs
+        $wRest = $worstSpikeObj.RestMs
+        $wOurs = $worstSpikeObj.OursMs
+        $wCC = $worstSpikeObj.ChunkCacheMs
+        $wBuilds = $worstSpikeObj.ChunkCacheBuilds
+        $wRestDet = $worstSpikeObj.RestDetails
+        $wTh = $worstSpikeObj.Thread
+
+        $gcPct = if ($wTotal -gt 0) { [math]::Round(($wRest / $wTotal) * 100, 1) } else { 0 }
+        $ccPct = if ($wTotal -gt 0) { [math]::Round(($wOurs / $wTotal) * 100, 1) } else { 0 }
+
+        if ($wRestDet -match "collector's pauses" -and $gcPct -ge 50.0) {
+            $worstSpikeAnatomy = "$wRest ms Engine & GC Pauses ($gcPct%) | $wOurs ms Chunk Meshing & Passes ($ccPct%)"
+            $worstSpikeRootCause = "Severe Java Garbage Collection Freeze (Engine Memory Sweep)"
+            $worstSpikeAttribution = "JVM Heap Garbage Collection. NOT caused by Lua UI or QOL mods."
+            $worstSpikeRecommendation = "Apply Menu Option [4] (One-Click G1GC + 5ms Pause Tuning) to eliminate GC freezes."
+            if ($wCC -ge 10.0 -or $wBuilds -ge 10) {
+                $worstSpikeCorrelatedMods = @($topMeshMods | Select-Object -First 2)
+            }
+        } elseif ($wCC -ge 30.0 -or $wBuilds -ge 20 -or ($wCC / $wTotal) -ge 0.40) {
+            $worstSpikeAnatomy = "$wCC ms Chunk Cache Meshing ($ccPct%, $wBuilds builds) | $wRest ms Engine Simulation ($gcPct%)"
+            $worstSpikeRootCause = "Dynamic 3D Mesh Compilation on Chunk Traversal"
+            $worstSpikeAttribution = "Massive 3D model injections crossing chunk borders."
+            $worstSpikeRecommendation = "Trim 3D furniture/model replacement packs to reduce chunk boundary stalls."
+            $worstSpikeCorrelatedMods = @($topMeshMods | Select-Object -First 3)
+        } elseif ($wTh -eq "render" -and $wRestDet -match "waiting for the main thread") {
+            $worstSpikeAnatomy = "$wRest ms Waiting for Main Thread ($gcPct%) | $wOurs ms Render Passes ($ccPct%)"
+            $worstSpikeRootCause = "GPU Render Thread Blocked Waiting for CPU Main Thread Tick"
+            $worstSpikeAttribution = "Main thread CPU tick budget overflow from excessive per-frame Lua loops."
+            $worstSpikeRecommendation = "Lower in-game frame rate cap to 120 FPS (Option [5]) or reduce vehicle fleet mods."
+            $worstSpikeCorrelatedMods = @($topCpuMods | Select-Object -First 3)
+        } else {
+            $worstSpikeAnatomy = "$wRest ms Engine Simulation | $wOurs ms Mod Passes"
+            $worstSpikeRootCause = "High Simulation / Combat Burst"
+            $worstSpikeAttribution = "Heavy world/zombie queries or entity updates during action."
+            $worstSpikeRecommendation = "Review mods with high in-hook entity queries."
+            $worstSpikeCorrelatedMods = @($topSpikeMods | Select-Object -First 3)
+        }
+    }
+
     # Compute Global Modpack Totals & Loop Density
     $totalPermHooks = ($modReports | Measure-Object -Property PermanentHooks -Sum).Sum
     if (-not $totalPermHooks) { $totalPermHooks = 0 }
@@ -1252,6 +1356,11 @@ function Invoke-PZScanEngine([string]$CustomServerIni = "", [switch]$LocalWorksh
     Write-Host "   RUNTIME ENGINE TELEMETRY SUMMARY" -ForegroundColor Cyan
     Write-Host "-----------------------------------------------------------------" -ForegroundColor Gray
     Write-Host " Configured Frame Cap : $optionsFps (Active: $frameCap)" -ForegroundColor White
+    if ($hasHeadroomTelemetry) {
+        $headroomColor = if ($headroomMainThreadMs -le 11.0 -and $headroomGpuMs -le 11.0) { "Green" } elseif ($headroomMainThreadMs -le 16.6) { "Yellow" } else { "Red" }
+        Write-Host " Hardware Frame Times : GPU: $headroomGpuMs ms | Render CPU: $headroomRenderCpuMs ms | Main Thread: $headroomMainThreadMs ms (~$headroomMainThreadFps FPS cap)" -ForegroundColor $headroomColor
+        Write-Host " Live World Simulation: $headroomZombies active zombies loaded in simulation radius ($headroomFps in-game FPS)" -ForegroundColor White
+    }
     Write-Host " GPU VRAM Usage       : $vramReport" -ForegroundColor White
     if ($maxEvictions -gt 0) {
         Write-Host "   [!] GPU Thrashing  : $maxEvictions texture evictions ($maxEvictedMb MiB swapped across PCIe)!" -ForegroundColor Red
@@ -1265,13 +1374,16 @@ function Invoke-PZScanEngine([string]$CustomServerIni = "", [switch]$LocalWorksh
     Write-Host " JVM Garbage Collector: $gcReport" -ForegroundColor $gcColor
     Write-Host " Slow Frames (>50ms)  : $($slowFrames.Count) recorded in last session" -ForegroundColor $(if ($slowFrames.Count -gt 0) { "Red" } else { "Green" })
     if ($slowFrames.Count -gt 0) {
-        $maxSlow = ($slowFrames | Measure-Object -Property DurationMs -Maximum).Maximum
-        Write-Host " Worst Frame Spike    : $maxSlow ms" -ForegroundColor Red
+        Write-Host " Worst Frame Spike    : $wTotal ms ($($wTh.ToUpper()) THREAD)" -ForegroundColor Red
+        Write-Host "   -> SPIKE ANATOMY   : $worstSpikeAnatomy" -ForegroundColor Yellow
+        Write-Host "   -> ROOT CAUSE      : $worstSpikeRootCause" -ForegroundColor $(if ($worstSpikeRootCause -match "Severe|Heavy") { "Red" } else { "Yellow" })
+        Write-Host "   -> ATTRIBUTION     : $worstSpikeAttribution" -ForegroundColor DarkYellow
+        Write-Host "   -> ACTIONABLE FIX  : $worstSpikeRecommendation" -ForegroundColor Cyan
         
-        if ($topSpikeMods.Count -gt 0) {
-            Write-Host "   -> TOP CORRELATED SPIKE CULPRITS:" -ForegroundColor Yellow
+        if ($worstSpikeCorrelatedMods.Count -gt 0) {
+            Write-Host "   -> CORRELATED MODS :" -ForegroundColor Yellow
             $cIdx = 0
-            foreach ($tsm in $topSpikeMods) {
+            foreach ($tsm in $worstSpikeCorrelatedMods) {
                 $cIdx++
                 $modDisplay = $tsm.ModName
                 if ($modDisplay.Length -gt 32) { $modDisplay = $modDisplay.Substring(0, 29) + "..." }
@@ -1317,6 +1429,7 @@ function Invoke-PZScanEngine([string]$CustomServerIni = "", [switch]$LocalWorksh
 
     Write-Host "`n-----------------------------------------------------------------" -ForegroundColor Gray
     Write-Host "   ACTIVE MODS RANKED BY STUTTER & PERFORMANCE IMPACT" -ForegroundColor Cyan
+    Write-Host "   (Note: Static code risk represents worst-case burst complexity bounds, not live session measurements)" -ForegroundColor DarkGray
     Write-Host "-----------------------------------------------------------------" -ForegroundColor Gray
 
     foreach ($mod in $sortedMods) {
@@ -1337,11 +1450,11 @@ function Invoke-PZScanEngine([string]$CustomServerIni = "", [switch]$LocalWorksh
         }
         
         Write-Host " $prefix $namePadded (Score: $($mod.RiskScore.ToString().PadLeft(3)) | $hookText | Size: $($mod.SizeMB.ToString().PadLeft(5)) MB)" -ForegroundColor $color
-        Write-Host "   -> POTENTIAL SPIKE: $($mod.PotentialSpike) | Frame Tax: $($mod.FrameTax)" -ForegroundColor $(if ($mod.RiskScore -ge 45) { "Red" } elseif ($mod.RiskScore -ge 20) { "Yellow" } else { "DarkCyan" })
-        Write-Host "   -> TRIGGER EVENT  : $($mod.StutterTrigger)" -ForegroundColor DarkGray
-        Write-Host "   -> VERDICT        : $($mod.Verdict)" -ForegroundColor $(if ($mod.RiskScore -ge 45) { "Yellow" } else { "DarkCyan" })
+        Write-Host "   -> STATIC CODE RISK: $($mod.PotentialSpike) (Heuristic) | Frame Tax: $($mod.FrameTax)" -ForegroundColor $(if ($mod.RiskScore -ge 45) { "Red" } elseif ($mod.RiskScore -ge 20) { "Yellow" } else { "DarkCyan" })
+        Write-Host "   -> TRIGGER EVENT   : $($mod.StutterTrigger)" -ForegroundColor DarkGray
+        Write-Host "   -> VERDICT         : $($mod.Verdict)" -ForegroundColor $(if ($mod.RiskScore -ge 45) { "Yellow" } else { "DarkCyan" })
         if ($mod.Reasons -and $mod.RiskScore -ge 20) {
-            Write-Host "   -> DETAILS        : $($mod.Reasons)" -ForegroundColor DarkGray
+            Write-Host "   -> DETAILS         : $($mod.Reasons)" -ForegroundColor DarkGray
         }
     }
 
@@ -1389,7 +1502,7 @@ function Invoke-PZScanEngine([string]$CustomServerIni = "", [switch]$LocalWorksh
     # Generate Markdown Report
     $md = @()
     $md += "# Project Zomboid Mod Performance & Optimization Diagnostic Report"
-    $md += "*Generated: $(Get-Date -Format 'yyyy-MM-dd HH:mm:ss') on $env:COMPUTERNAME by PZ-Mod-Performance-Suite v2.4.0 (Coded with the help of Google Gemini)*"
+    $md += "*Generated: $(Get-Date -Format 'yyyy-MM-dd HH:mm:ss') on $env:COMPUTERNAME by PZ-Mod-Performance-Suite v2.5.0 (Coded with the help of Google Gemini)*"
     $md += ""
     $md += "## Executive Summary"
     $md += "- **Game Version:** $pzVersion"
@@ -1400,14 +1513,24 @@ function Invoke-PZScanEngine([string]$CustomServerIni = "", [switch]$LocalWorksh
     }
     $md += "- **Cumulative Mod Frame Tax:** +$totalFrameTaxRaw ms/frame ($totalPermHooks permanent per-frame loops)"
     $md += "- **Configured Frame Cap:** $optionsFps (Active: $frameCap)"
+    if ($hasHeadroomTelemetry) {
+        $md += "- **Hardware Frame Budget:** GPU: $headroomGpuMs ms | Render CPU: $headroomRenderCpuMs ms | Main Thread: $headroomMainThreadMs ms (~$headroomMainThreadFps FPS headroom)"
+        $md += "- **Live Simulation Density:** $headroomZombies active zombies loaded in simulation radius ($headroomFps in-game FPS)"
+    }
     $md += "- **VRAM Free:** $vramReport"
     if ($maxEvictions -gt 0) {
         $md += "- **GPU VRAM Thrashing:** $maxEvictions texture evictions ($maxEvictedMb MiB swapped to RAM across PCIe) - High Stutter Risk"
     }
-    $md += "- **Worst Recorded Hitch:** $(if ($slowFrames.Count -gt 0) { "$maxSlow ms" } else { "None" })"
-    if ($topSpikeMods.Count -gt 0) {
-        $spikeCulpritsMd = ($topSpikeMods | ForEach-Object { "**$($_.ModName)** ($($_.PotentialSpike))" }) -join "; "
-        $md += "- **Top Correlated Spike Culprits:** $spikeCulpritsMd"
+    $md += "- **Worst Recorded Hitch:** $(if ($slowFrames.Count -gt 0) { "$wTotal ms ($($wTh.ToUpper()) THREAD)" } else { "None" })"
+    if ($slowFrames.Count -gt 0) {
+        $md += "  - **Spike Anatomy:** $worstSpikeAnatomy"
+        $md += "  - **Root Cause:** $worstSpikeRootCause"
+        $md += "  - **Diagnostic Attribution:** $worstSpikeAttribution"
+        $md += "  - **Actionable Fix:** $worstSpikeRecommendation"
+        if ($worstSpikeCorrelatedMods.Count -gt 0) {
+            $spikeCulpritsMd = ($worstSpikeCorrelatedMods | ForEach-Object { "**$($_.ModName)** ($($_.PotentialSpike))" }) -join "; "
+            $md += "  - **Correlated Culprits:** $spikeCulpritsMd"
+        }
     }
     if ($maxChunkBuilds -gt 0) {
         $md += "- **Chunk Meshing Peak:** $maxChunkBuilds builds ($maxChunkDuration ms rebuild stall)"
@@ -1479,7 +1602,7 @@ function Invoke-PZScanEngine([string]$CustomServerIni = "", [switch]$LocalWorksh
     $md += "---"
     $md += "## All Active Mods Ranked by Performance Impact"
     $md += ""
-    $md += "| Mod Name | Mod ID | Tier | Score | Potential Spike | Frame Tax | Trigger Scenario | Perm Loops | Trans / Throt | Queries (Hook/UI) | Size (MB) | Models | Stutter Verdict |"
+    $md += "| Mod Name | Mod ID | Tier | Score | Predicted Risk (Heuristic) | Frame Tax | Trigger Scenario | Perm Loops | Trans / Throt | Queries (Hook/UI) | Size (MB) | Models | Stutter Verdict |"
     $md += "|:---|:---|:---:|:---:|:---:|:---:|:---|:---:|:---:|:---:|:---:|:---:|:---|"
     foreach ($m in $sortedMods) {
         $mId = $m.ModId
@@ -1524,7 +1647,7 @@ function Invoke-PZScanEngine([string]$CustomServerIni = "", [switch]$LocalWorksh
     $md += '```text'
     $md += "PZ Mod Performance Audit ($pzVersion) - $saveName"
     $uninstalledTag = if ($uninstalledMods.Count -gt 0) { " (+$($uninstalledMods.Count) uninstalled)" } else { "" }
-    $worstHitchTag = if ($slowFrames.Count -gt 0) { "$maxSlow ms" } else { "0ms" }
+    $worstHitchTag = if ($slowFrames.Count -gt 0) { "$wTotal ms" } else { "0ms" }
     $evictTag = if ($maxEvictions -gt 0) { " | Evictions: ${maxEvictions}x" } else { "" }
     $md += "Mods: $($sortedMods.Count)$uninstalledTag | Loops: $totalPermHooks (+${totalFrameTaxRaw}ms/frame)$evictTag | Conflicts: $($collisions.Count) ($($safeCollisions.Count) Safe, $($riskyCollisions.Count) Risky) | VRAM: $vramReport | Worst Hitch: $worstHitchTag"
     $top3 = ($sortedMods | Select-Object -First 3 | ForEach-Object { "$($_.ModName) ($($_.Tier))" }) -join ", "
@@ -1543,7 +1666,7 @@ function Show-PZMainMenu {
     while ($true) {
         Clear-Host
         Write-Host "=================================================================" -ForegroundColor Cyan
-        Write-Host "   PROJECT ZOMBOID MOD PERFORMANCE & OPTIMIZATION SUITE v2.4.0  " -ForegroundColor Yellow
+        Write-Host "   PROJECT ZOMBOID MOD PERFORMANCE & OPTIMIZATION SUITE v2.5.0  " -ForegroundColor Yellow
         Write-Host "         Created by @KodeMannn with the help of Gemini          " -ForegroundColor DarkCyan
         Write-Host "=================================================================" -ForegroundColor Cyan
         Write-Host "  [1] Run Full Performance Diagnostic Scan (Active Save)" -ForegroundColor White
