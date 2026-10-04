@@ -1,6 +1,6 @@
 <# :
 @echo off
-title Project Zomboid Mod Performance ^& Optimization Suite v2.2.1
+title Project Zomboid Mod Performance ^& Optimization Suite v2.3.0
 color 0F
 powershell -NoProfile -ExecutionPolicy Bypass -Command "& ([scriptblock]::Create([System.IO.File]::ReadAllText('%~f0'))) %*"
 echo.
@@ -9,11 +9,12 @@ exit /b
 #>
 <#
 .SYNOPSIS
-    Project Zomboid Mod Performance & Optimization Suite v2.2.1
+    Project Zomboid Mod Performance & Optimization Suite v2.3.0
 .DESCRIPTION
     Comprehensive diagnostic scanner and optimization toolkit for Project Zomboid (Build 42 & 41).
-    Features Potential Frame Spike & Stutter Prediction (ms), Continuous Frame Time Tax (+ms/frame),
-    Stutter Trigger Scenarios, Build 42 version-aware deduplication, semantic Lua hook auditing,
+    Features Global Modpack Runtime Budget & Cumulative Loop Density, GPU VRAM Eviction & Texture
+    Thrashing Detector, Mass Vehicle Fleet Stacking Aggregator, Chunk Meshing Traversal Telemetry,
+    Potential Frame Spike & Stutter Prediction (ms), Continuous Frame Time Tax (+ms/frame),
     and 1-click engine tuning for Java GC, frame caps, and savegame hygiene.
 .AUTHOR
     KodeMannn (https://github.com/KodeMannn) - Coded with the assistance of Google Gemini
@@ -643,7 +644,7 @@ function Get-ModStutterMetrics {
 # ==============================================================================
 function Invoke-PZScanEngine([string]$CustomServerIni = "", [switch]$LocalWorkshopOnly, [string]$CustomWorkshopPath = "") {
     Write-Host "`n=================================================================" -ForegroundColor Cyan
-    Write-Host "   PROJECT ZOMBOID MOD PERFORMANCE & OPTIMIZATION SUITE v2.2.1  " -ForegroundColor Yellow
+    Write-Host "   PROJECT ZOMBOID MOD PERFORMANCE & OPTIMIZATION SUITE v2.3.0  " -ForegroundColor Yellow
     Write-Host "         Created by @KodeMannn with the help of Gemini          " -ForegroundColor DarkCyan
     Write-Host "=================================================================`n" -ForegroundColor Cyan
 
@@ -1091,7 +1092,7 @@ function Invoke-PZScanEngine([string]$CustomServerIni = "", [switch]$LocalWorksh
         }
     }
 
-    # Parse runtime logs
+    # Parse runtime logs safely (even while PZ is actively running)
     $consoleLog = Join-Path $ZomboidUserPath "console.txt"
     $slowFrames = @()
     $vramReport = "N/A"
@@ -1104,9 +1105,25 @@ function Invoke-PZScanEngine([string]$CustomServerIni = "", [switch]$LocalWorksh
     $totalConcCount = 0
     $totalConcMs = 0
     $hasGcTelemetry = $false
+    $maxEvictions = 0
+    $maxEvictedMb = 0.0
+    $maxChunkBuilds = 0
+    $maxChunkDuration = 0.0
 
     if (Test-Path $consoleLog) {
-        $logLines = Get-Content $consoleLog -ErrorAction SilentlyContinue
+        $logLines = @()
+        try {
+            $stream = [System.IO.File]::Open($consoleLog, [System.IO.FileMode]::Open, [System.IO.FileAccess]::Read, [System.IO.FileShare]::ReadWrite)
+            $reader = New-Object System.IO.StreamReader($stream, [System.Text.Encoding]::UTF8)
+            while (-not $reader.EndOfStream) {
+                $logLines += $reader.ReadLine()
+            }
+            $reader.Close()
+            $stream.Close()
+        } catch {
+            $logLines = Get-Content $consoleLog -ErrorAction SilentlyContinue
+        }
+
         foreach ($line in $logLines) {
             if ($line -match 'slow frame on the (main|render) thread:\s*([\d\.]+)\s*ms.*ours\s*([\d\.]+)') {
                 $slowFrames += [PSCustomObject]@{
@@ -1132,8 +1149,32 @@ function Invoke-PZScanEngine([string]$CustomServerIni = "", [switch]$LocalWorksh
                     $totalConcMs += [int]$matches[2]
                 }
             }
-            if ($line -match 'video memory MiB free (\d+) of (\d+)') {
+            if ($line -match 'video memory MiB free (\d+) of (\d+)(?:,\s*evictions\s*(\d+)\s*\(([\d\.]+)\s*MiB\))?') {
                 $vramReport = "$($matches[1]) MB free of $($matches[2]) MB"
+                if ($matches[3]) {
+                    $eCount = [int]$matches[3]
+                    $eMb = [double]$matches[4]
+                    if ($eCount -gt $maxEvictions) {
+                        $maxEvictions = $eCount
+                        $maxEvictedMb = $eMb
+                    }
+                }
+            }
+            if ($line -match 'video memory:\s*(\d+)\s*evictions\s*\(([\d\.]+)\s*MiB\)') {
+                $eCount = [int]$matches[1]
+                $eMb = [double]$matches[2]
+                if ($eCount -gt $maxEvictions) {
+                    $maxEvictions = $eCount
+                    $maxEvictedMb = $eMb
+                }
+            }
+            if ($line -match 'chunk cache ([\d\.]+):\s*(\d+)\s*builds') {
+                $bDur = [double]$matches[1]
+                $bCount = [int]$matches[2]
+                if ($bCount -gt $maxChunkBuilds) {
+                    $maxChunkBuilds = $bCount
+                    $maxChunkDuration = $bDur
+                }
             }
             if ($line -match 'heap used (\d+) of (\d+)') {
                 $heapReport = "$($matches[1]) MB used of $($matches[2]) MB"
@@ -1171,12 +1212,43 @@ function Invoke-PZScanEngine([string]$CustomServerIni = "", [switch]$LocalWorksh
 
     $sortedMods = $modReports | Sort-Object -Property RiskScore -Descending
 
+    # Compute Global Modpack Totals & Loop Density
+    $totalPermHooks = ($modReports | Measure-Object -Property PermanentHooks -Sum).Sum
+    if (-not $totalPermHooks) { $totalPermHooks = 0 }
+    $totalTransHooks = ($modReports | Measure-Object -Property TransientHooks -Sum).Sum
+    if (-not $totalTransHooks) { $totalTransHooks = 0 }
+    $totalThrottledHooks = ($modReports | Measure-Object -Property ThrottledHooks -Sum).Sum
+    if (-not $totalThrottledHooks) { $totalThrottledHooks = 0 }
+    $totalInHookQueries = ($modReports | Measure-Object -Property InHookWorldQueries -Sum).Sum
+    if (-not $totalInHookQueries) { $totalInHookQueries = 0 }
+    $totalModModels = ($modReports | Measure-Object -Property ModelCount -Sum).Sum
+    if (-not $totalModModels) { $totalModModels = 0 }
+    $totalModTexMB = [math]::Round(($modReports | Measure-Object -Property TextureMB -Sum).Sum, 2)
+    $totalModSizeMB = [math]::Round(($modReports | Measure-Object -Property SizeMB -Sum).Sum, 2)
+    $totalFrameTaxRaw = [math]::Round(($totalPermHooks * 0.45) + ($totalInHookQueries * 0.08) + ($totalThrottledHooks * 0.02), 2)
+
+    # Detect mass vehicle fleet stacking
+    $vehicleMods = $modReports | Where-Object {
+        $_.ModId -match 'vehicle|jeep|chevy|ford|dodge|lambo|nissan|amgeneral|toyota|ferret|touran|meteor|banshee|pontiac|corvette|mercedes|camaro|mustang|mini|barracuda|chevelle|falcon|bushmaster|impreza|lancer|saturn|stagea|towncar|cucv|oshkosh|regal|suburban|hilux|bronco|volvo|trooper|taurus|beetle|damnlib|ECTO1|lockMart|KI5'
+    }
+    $vehicleCount = if ($vehicleMods) { $vehicleMods.Count } else { 0 }
+    $vehiclePermLoops = if ($vehicleMods) { ($vehicleMods | Measure-Object -Property PermanentHooks -Sum).Sum } else { 0 }
+    if (-not $vehiclePermLoops) { $vehiclePermLoops = 0 }
+    $vehicleTax = [math]::Round(($vehiclePermLoops * 0.45), 2)
+    $vehicleModels = if ($vehicleMods) { ($vehicleMods | Measure-Object -Property ModelCount -Sum).Sum } else { 0 }
+    if (-not $vehicleModels) { $vehicleModels = 0 }
+    $vehicleTexMB = if ($vehicleMods) { [math]::Round(($vehicleMods | Measure-Object -Property TextureMB -Sum).Sum, 2) } else { 0 }
+
     # Display summary
     Write-Host "`n-----------------------------------------------------------------" -ForegroundColor Gray
     Write-Host "   RUNTIME ENGINE TELEMETRY SUMMARY" -ForegroundColor Cyan
     Write-Host "-----------------------------------------------------------------" -ForegroundColor Gray
     Write-Host " Configured Frame Cap : $optionsFps (Active: $frameCap)" -ForegroundColor White
     Write-Host " GPU VRAM Usage       : $vramReport" -ForegroundColor White
+    if ($maxEvictions -gt 0) {
+        Write-Host "   [!] GPU Thrashing  : $maxEvictions texture evictions ($maxEvictedMb MiB swapped across PCIe)!" -ForegroundColor Red
+        Write-Host "       Cause & Impact : VRAM saturated; PCIe texture swapping causes 100-250ms render hitching" -ForegroundColor Yellow
+    }
     Write-Host " Java Heap Allocation : $heapReport" -ForegroundColor White
     Write-Host " JVM Garbage Collector: $gcReport" -ForegroundColor $gcColor
     Write-Host " Slow Frames (>50ms)  : $($slowFrames.Count) recorded in last session" -ForegroundColor $(if ($slowFrames.Count -gt 0) { "Red" } else { "Green" })
@@ -1189,7 +1261,32 @@ function Invoke-PZScanEngine([string]$CustomServerIni = "", [switch]$LocalWorksh
             Write-Host "   -> CORRELATION    : Strongly correlates with [$($topSpikeMod.ModName)] (predicted: $($topSpikeMod.PotentialSpike))" -ForegroundColor Yellow
         }
     }
+    if ($maxChunkBuilds -gt 0) {
+        $chunkColor = if ($maxChunkBuilds -ge 50) { "Red" } elseif ($maxChunkBuilds -ge 20) { "Yellow" } else { "Gray" }
+        Write-Host " Chunk Cache Hitches  : Up to $maxChunkBuilds mesh builds/chunk (Peak rebuild stall: $($maxChunkDuration) ms)" -ForegroundColor $chunkColor
+    }
     Write-Host " File Override Clashes: $($collisions.Count) detected ($($safeCollisions.Count) Safe, $($riskyCollisions.Count) High/Moderate Risk)" -ForegroundColor $(if ($riskyCollisions.Count -gt 0) { "Red" } elseif ($collisions.Count -gt 0) { "Green" } else { "Green" })
+
+    # Display Global Modpack Runtime Budget & Loop Density
+    Write-Host "`n-----------------------------------------------------------------" -ForegroundColor Gray
+    Write-Host "   GLOBAL MODPACK RUNTIME BUDGET & LOOP DENSITY" -ForegroundColor Cyan
+    Write-Host "-----------------------------------------------------------------" -ForegroundColor Gray
+    Write-Host " Cumulative Mod Frame Tax : +$totalFrameTaxRaw ms/frame (Continuous CPU tick overhead)" -ForegroundColor $(if ($totalFrameTaxRaw -ge 15.0) { "Red" } elseif ($totalFrameTaxRaw -ge 5.0) { "Yellow" } else { "Green" })
+    Write-Host " Active Per-Frame Loops   : $totalPermHooks permanent hooks firing every single frame" -ForegroundColor $(if ($totalPermHooks -ge 30) { "Red" } elseif ($totalPermHooks -ge 15) { "Yellow" } else { "Green" })
+    Write-Host " Total Custom 3D Models   : $totalModModels meshes ($totalModTexMB MB textures across mods)" -ForegroundColor $(if ($totalModModels -ge 3000) { "Red" } elseif ($totalModModels -ge 1000) { "Yellow" } else { "Green" })
+
+    if ($totalPermHooks -ge 15) {
+        Write-Host "`n [ALERT] High Loop Density: Cumulative 'death by 1,000 cuts' detected!" -ForegroundColor Red
+        Write-Host "         Even if individual mods score lightweight (green), running $totalPermHooks simultaneous" -ForegroundColor Yellow
+        Write-Host "         per-frame Lua hooks eats CPU headroom and causes stuttering during movement." -ForegroundColor Gray
+    }
+
+    if ($vehicleCount -ge 15) {
+        Write-Host "`n [MASS VEHICLE FLEET WARNING] $vehicleCount vehicle mods active ($vehiclePermLoops loops running)!" -ForegroundColor Red
+        Write-Host "         Vehicle mods register per-frame speed/gauge hooks (e.g. DorothyAnemometer)." -ForegroundColor Yellow
+        Write-Host "         Combined, your vehicle fleet contributes +$vehicleTax ms/frame overhead & $vehicleModels meshes." -ForegroundColor Gray
+        Write-Host "         Recommendation: Trim vehicle mods you aren't currently driving." -ForegroundColor Cyan
+    }
 
     Write-Host "`n-----------------------------------------------------------------" -ForegroundColor Gray
     Write-Host "   ACTIVE MODS RANKED BY STUTTER & PERFORMANCE IMPACT" -ForegroundColor Cyan
@@ -1265,7 +1362,7 @@ function Invoke-PZScanEngine([string]$CustomServerIni = "", [switch]$LocalWorksh
     # Generate Markdown Report
     $md = @()
     $md += "# Project Zomboid Mod Performance & Optimization Diagnostic Report"
-    $md += "*Generated: $(Get-Date -Format 'yyyy-MM-dd HH:mm:ss') on $env:COMPUTERNAME by PZ-Mod-Performance-Suite v2.2.1 (Coded with the help of Google Gemini)*"
+    $md += "*Generated: $(Get-Date -Format 'yyyy-MM-dd HH:mm:ss') on $env:COMPUTERNAME by PZ-Mod-Performance-Suite v2.3.0 (Coded with the help of Google Gemini)*"
     $md += ""
     $md += "## Executive Summary"
     $md += "- **Game Version:** $pzVersion"
@@ -1274,16 +1371,45 @@ function Invoke-PZScanEngine([string]$CustomServerIni = "", [switch]$LocalWorksh
     if ($uninstalledMods.Count -gt 0) {
         $md += "- **Uninstalled Phantom Mods in Save:** $($uninstalledMods.Count) (omitted from performance audit: $($uninstalledMods -join ', '))"
     }
+    $md += "- **Cumulative Mod Frame Tax:** +$totalFrameTaxRaw ms/frame ($totalPermHooks permanent per-frame loops)"
     $md += "- **Configured Frame Cap:** $optionsFps (Active: $frameCap)"
     $md += "- **VRAM Free:** $vramReport"
+    if ($maxEvictions -gt 0) {
+        $md += "- **GPU VRAM Thrashing:** $maxEvictions texture evictions ($maxEvictedMb MiB swapped to RAM across PCIe) - High Stutter Risk"
+    }
     $md += "- **Worst Recorded Hitch:** $(if ($slowFrames.Count -gt 0) { "$maxSlow ms" } else { "None" })"
+    if ($maxChunkBuilds -gt 0) {
+        $md += "- **Chunk Meshing Peak:** $maxChunkBuilds builds ($maxChunkDuration ms rebuild stall)"
+    }
     $md += "- **JVM Garbage Collector:** $gcReport"
     $md += "- **Direct File Override Clashes:** $($collisions.Count) total ($($safeCollisions.Count) Safe, $($riskyCollisions.Count) High/Moderate Risk)"
     $md += ""
     $md += "---"
+    $md += "## Global Modpack Runtime Budget & Fleet Stacking Analysis"
+    $md += ""
+    $md += "| Global Metric | Audit Value | Safety Threshold | Diagnostic Status |"
+    $md += "|:---|:---:|:---:|:---|"
+    $md += "| **Cumulative Frame Tax** | +$totalFrameTaxRaw ms/frame | < 5.00 ms/frame | $(if ($totalFrameTaxRaw -ge 15.0) { '**CRITICAL (Severe CPU drag)**' } elseif ($totalFrameTaxRaw -ge 5.0) { '**HIGH (Heavy load)**' } else { 'Optimal' }) |"
+    $md += "| **Permanent Per-Frame Loops** | $totalPermHooks hooks | < 15 hooks | $(if ($totalPermHooks -ge 30) { '**CRITICAL (Death by 1,000 cuts)**' } elseif ($totalPermHooks -ge 15) { '**HIGH (High loop density)**' } else { 'Optimal' }) |"
+    $md += "| **Total Custom 3D Meshes** | $totalModModels meshes | < 1,000 meshes | $(if ($totalModModels -ge 3000) { '**CRITICAL (Chunk meshing stalls)**' } elseif ($totalModModels -ge 1000) { '**HIGH (Heavy meshing)**' } else { 'Optimal' }) |"
+    $md += "| **Total Texture Footprint** | $totalModTexMB MB | < 500 MB | $(if ($totalModTexMB -ge 1500) { '**CRITICAL (VRAM exhaustion)**' } elseif ($totalModTexMB -ge 500) { '**HIGH (VRAM pressure)**' } else { 'Optimal' }) |"
+    $md += "| **GPU Texture Evictions (PCIe Swaps)** | $maxEvictions ($maxEvictedMb MiB) | 0 evictions | $(if ($maxEvictions -gt 0) { '**ACTIVE THRASHING (Render freezes)**' } else { 'Optimal' }) |"
+    $md += "| **Peak Chunk Cache Builds** | $maxChunkBuilds builds | < 20 builds | $(if ($maxChunkBuilds -ge 50) { '**HEAVY STALLS (Border traversal lag)**' } else { 'Normal' }) |"
+    $md += ""
+    if ($vehicleCount -ge 15) {
+        $md += "> [!WARNING]"
+        $md += "> **Mass Vehicle Fleet Detected ($vehicleCount Active Vehicle Mods)**"
+        $md += "> - **Fleet Per-Frame Loops:** $vehiclePermLoops permanent hooks (e.g. DorothyAnemometer, vehicle dash updates)"
+        $md += "> - **Fleet Continuous CPU Tax:** +$vehicleTax ms/frame"
+        $md += "> - **Fleet Custom Meshes & Textures:** $vehicleModels 3D models, $vehicleTexMB MB textures"
+        $md += "> "
+        $md += "> *Even though each vehicle mod in isolation appears lightweight (Tier 4 / green), stacking $vehicleCount vehicle mods results in severe cumulative background overhead and VRAM thrashing when crossing chunks.*"
+        $md += ""
+    }
+    $md += "---"
     $md += "## Key Bottlenecks & High Risk Mods (Tier 1 - Tier 3)"
     $md += ""
-    $criticals = $sortedMods | Where-Object { $_.RiskScore -ge 20 }
+    $criticals = @($sortedMods | Where-Object { $_.RiskScore -ge 20 })
     if ($criticals.Count -gt 0) {
         foreach ($c in $criticals) {
             $modIdText = $c.ModId
@@ -1355,7 +1481,8 @@ function Invoke-PZScanEngine([string]$CustomServerIni = "", [switch]$LocalWorksh
     $md += "PZ Mod Performance Audit ($pzVersion) - $saveName"
     $uninstalledTag = if ($uninstalledMods.Count -gt 0) { " (+$($uninstalledMods.Count) uninstalled)" } else { "" }
     $worstHitchTag = if ($slowFrames.Count -gt 0) { "$maxSlow ms" } else { "0ms" }
-    $md += "Mods: $($sortedMods.Count)$uninstalledTag | Conflicts: $($collisions.Count) ($($safeCollisions.Count) Safe, $($riskyCollisions.Count) Risky) | VRAM: $vramReport | Worst Hitch: $worstHitchTag"
+    $evictTag = if ($maxEvictions -gt 0) { " | Evictions: ${maxEvictions}x" } else { "" }
+    $md += "Mods: $($sortedMods.Count)$uninstalledTag | Loops: $totalPermHooks (+${totalFrameTaxRaw}ms/frame)$evictTag | Conflicts: $($collisions.Count) ($($safeCollisions.Count) Safe, $($riskyCollisions.Count) Risky) | VRAM: $vramReport | Worst Hitch: $worstHitchTag"
     $top3 = ($sortedMods | Select-Object -First 3 | ForEach-Object { "$($_.ModName) ($($_.Tier))" }) -join ", "
     $md += "Top Lag Impact Mods: $top3"
     $md += '```'
@@ -1372,7 +1499,7 @@ function Show-PZMainMenu {
     while ($true) {
         Clear-Host
         Write-Host "=================================================================" -ForegroundColor Cyan
-        Write-Host "   PROJECT ZOMBOID MOD PERFORMANCE & OPTIMIZATION SUITE v2.2.1  " -ForegroundColor Yellow
+        Write-Host "   PROJECT ZOMBOID MOD PERFORMANCE & OPTIMIZATION SUITE v2.3.0  " -ForegroundColor Yellow
         Write-Host "         Created by @KodeMannn with the help of Gemini          " -ForegroundColor DarkCyan
         Write-Host "=================================================================" -ForegroundColor Cyan
         Write-Host "  [1] Run Full Performance Diagnostic Scan (Active Save)" -ForegroundColor White

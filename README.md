@@ -73,6 +73,11 @@ PZ-Mod-Performance-Suite features 8 selectable operations to fit your workflow:
 ## 🔍 Key Features
 
 * **⚡ Ultra-Fast Multi-Library Workshop Indexing:** Finds mods across all Steam drives (`C:`, `D:`, `E:`, `H:`, external NVMe SSDs) via `libraryfolders.vdf`.
+* **🌐 Global Modpack Runtime Budget & Loop Density Engine (v2.3.0):** Solves the elusive "death by 1,000 cuts" where 50+ lightweight mods cumulatively overflow CPU frame budgets. Aggregates total persistent CPU tax (+ms/frame), counts active per-frame loops across the entire modpack, and fires High Loop Density alerts.
+* **🏎️ Mass Vehicle Fleet Stacking Aggregator (v2.3.0):** Flags when players accumulate 15+ vehicle mods running per-frame tachometer/speedometer loops (e.g. `DorothyAnemometer`), revealing cumulative frame tax (+6.75 ms/frame) and thousands of loaded vehicle meshes.
+* **🎮 GPU VRAM Eviction & Texture Thrashing Detector (v2.3.0):** Telemetry-based detector that parses Build 42 deferred renderer logs for texture evictions across the PCIe bus, identifying the root cause of 100–250ms render-thread freezes while running or driving.
+* **🗺️ Chunk Cache Meshing Traversal Telemetry (v2.3.0):** Monitors chunk boundary mesh builds and rebuild stalls, isolating stutter caused by massive 3D model injections when crossing world boundaries.
+* **🔒 Safe Concurrent Log Streaming:** Uses non-locking `[System.IO.FileShare]::ReadWrite` streams to safely run scans and parse telemetry even while Project Zomboid is actively running.
 * **⏱️ Potential Frame Spike & Stutter Prediction Engine (v2.2.0):** Estimates concrete freeze durations based on asset weight and code intensity:
   * `~350-550 ms [Severe Freeze]`: Massive 3D model injections causing chunk meshing stalls.
   * `~100-250 ms [Noticeable Hitch]`: Heavy texture packs causing VRAM paging spikes.
@@ -107,6 +112,8 @@ PZ-Mod-Performance-Suite features 8 selectable operations to fit your workflow:
 | Bottleneck Category | Engine Impact | Severity | Primary Culprits |
 | :--- | :--- | :--- | :--- |
 | **VRAM & Chunk Meshing Choke** | Stalls render thread for 350–550ms when moving across chunk boundaries | **CRITICAL** | Massive 3D model injection packs (10,000+ models, >150MB textures) |
+| **GPU VRAM Thrashing & PCIe Swapping** | Causes 100–250ms render-thread freezes when VRAM fills and textures swap to RAM | **CRITICAL** | Heavy texture packs combined with dozens of vehicle mods (>12GB VRAM) |
+| **Cumulative Modpack Loop Density** | "Death by 1,000 cuts": 15–80+ background loops consume main-thread CPU budget | **CRITICAL** | Stacking 50–80+ vehicle mods each running per-frame `DorothyAnemometer` |
 | **Unconstrained Permanent Lua Loops** | Consumes main-thread CPU budget running Lua calculations 240 times/sec | **CRITICAL** | Heavy `OnTick`, `OnPlayerUpdate` loops without throttle guards |
 | **Java GC Memory Sweeps** | Freezes entire world for 200–400ms during garbage collection | **HIGH RISK** | Oversized heap (`-Xmx32g`), ZGC pauses under Lua table churn |
 | **Missing Asset / Error Floods** | Floods `console.txt` with template syntax & missing asset disk logging | **HIGH RISK** | Outdated vehicle or animation templates in Build 42 |
@@ -122,13 +129,13 @@ PZ-Mod-Performance-Suite features 8 selectable operations to fit your workflow:
 
 ```text
 =================================================================
-   PROJECT ZOMBOID MOD PERFORMANCE & OPTIMIZATION SUITE v2.2.1  
+   PROJECT ZOMBOID MOD PERFORMANCE & OPTIMIZATION SUITE v2.3.0  
          Created by @KodeMannn with the help of Gemini          
 =================================================================
 
  [INFO] Detected Game Version: 42.21.0
- [INFO] Active Savegame: Outbreak / 2026-10-03_14-51-16
- [INFO] Total Enabled Mods to Audit: 29
+ [INFO] Active Savegame: Outbreak / 2026-10-04_14-23-47
+ [INFO] Total Enabled Mods to Audit: 174
 
  [*] Auditing Lua hooks, 3D meshes, texture packs, and file collisions...
 
@@ -136,48 +143,49 @@ PZ-Mod-Performance-Suite features 8 selectable operations to fit your workflow:
    RUNTIME ENGINE TELEMETRY SUMMARY
 -----------------------------------------------------------------
  Configured Frame Cap : 240 FPS (Active: 240 FPS)
- GPU VRAM Usage       : 839 MB free of 12282 MB
- Java Heap Allocation : 8689 MB used of 12800 MB
- JVM Garbage Collector: 0 Old Gen Freezes | Young Gen: 97 sweeps (avg 8.3 ms, 802 ms total)
- Slow Frames (>50ms)  : 91 recorded in last session
- Worst Frame Spike    : 524 ms
-   -> CORRELATION    : Strongly correlates with [6258 3D models for Viewpoint] (predicted: ~350-550 ms [Severe Freeze])
- File Override Clashes: 161 detected (159 Safe, 2 High/Moderate Risk)
+ GPU VRAM Usage       : 1421 MB free of 12282 MB
+   [!] GPU Thrashing  : 393 texture evictions (418 MiB swapped across PCIe)!
+       Cause & Impact : VRAM saturated; PCIe texture swapping causes 100-250ms render hitching
+ Java Heap Allocation : 5733 MB used of 12704 MB
+ JVM Garbage Collector: 0 Old Gen Freezes | Young Gen: 251 sweeps (avg 10.4 ms, 2605 ms total)
+ Slow Frames (>50ms)  : 42 recorded in last session
+ Worst Frame Spike    : 666.8 ms
+   -> CORRELATION    : Strongly correlates with [6261 3D models for Viewpoint] (predicted: ~350-550 ms [Severe Freeze])
+ Chunk Cache Hitches  : Up to 155 mesh builds/chunk (Peak rebuild stall: 10.6 ms)
+ File Override Clashes: 492 detected (488 Safe, 4 High/Moderate Risk)
+
+-----------------------------------------------------------------
+   GLOBAL MODPACK RUNTIME BUDGET & LOOP DENSITY
+-----------------------------------------------------------------
+ Cumulative Mod Frame Tax : +11.19 ms/frame (Continuous CPU tick overhead)
+ Active Per-Frame Loops   : 19 permanent hooks firing every single frame
+ Total Custom 3D Models   : 13092 meshes (1009.84 MB textures across mods)
+
+ [ALERT] High Loop Density: Cumulative 'death by 1,000 cuts' detected!
+         Even if individual mods score lightweight (green), running 19 simultaneous
+         per-frame Lua hooks eats CPU headroom and causes stuttering during movement.
+
+ [MASS VEHICLE FLEET WARNING] 88 vehicle mods active (15 loops running)!
+         Vehicle mods register per-frame speed/gauge hooks (e.g. DorothyAnemometer).
+         Combined, your vehicle fleet contributes +6.75 ms/frame overhead & 1773 meshes.
+         Recommendation: Trim vehicle mods you aren't currently driving.
 
 -----------------------------------------------------------------
    ACTIVE MODS RANKED BY STUTTER & PERFORMANCE IMPACT
 -----------------------------------------------------------------
- [Tier 1 (CRITICAL)]     6258 3D models for Viewpoint [sou... (Score: 100 | Loops: 0 Perm | Size: 319.19 MB)
+ [Tier 1 (CRITICAL)]     6261 3D models for Viewpoint [sou... (Score: 100 | Loops: 0 Perm | Size: 329.19 MB)
    -> POTENTIAL SPIKE: ~350-550 ms [Severe Freeze] | Frame Tax: +0.00 ms/frame
    -> TRIGGER EVENT  : Chunk Border Traversal & High-Speed Driving
    -> VERDICT        : Severe Chunk Meshing Freezes & Heavy VRAM Load
-   -> DETAILS        : Massive 3D model injection (10194 models) causing 400-500ms chunk stalls; Heavy texture pack (156.87 MB of textures) causing high VRAM consumption
- [Tier 2 (HIGH RISK)]    Vanilla Vehicles Animated            (Score:  45 | Loops: 0 Perm | Size:  11.91 MB)
-   -> POTENTIAL SPIKE: ~20-60 ms [Micro-Stutter] | Frame Tax: +0.00 ms/frame
-   -> TRIGGER EVENT  : Vehicle Spawn & Streaming
-   -> VERDICT        : Vehicle Stream Console Logging Spikes
-   -> DETAILS        : Missing vehicle templates causing synchronous console error logging bursts in B42
- [Tier 3 (MODERATE)]     True Swimming                        (Score:  29 | Loops: 0 Perm, 0 Trans, 3 Throt | Size:   1.96 MB)
-   -> POTENTIAL SPIKE: ~10-35 ms [Combat Hitch] | Frame Tax: +1.38 ms/frame
-   -> TRIGGER EVENT  : Horde Proximity & Combat
-   -> VERDICT        : Moderate Resource Load (Periodic timers or asset weight)
-   -> DETAILS        : 3 throttled / timer-gated hooks (periodic execution); 16 in-hook world queries (getSquare/getZombieList)
- [Tier 3 (MODERATE)]     True Crawling                        (Score:  22 | Loops: 0 Perm, 0 Trans, 1 Throt | Size:   1.29 MB)
-   -> POTENTIAL SPIKE: ~10-35 ms [Combat Hitch] | Frame Tax: +0.82 ms/frame
-   -> TRIGGER EVENT  : Horde Proximity & Combat
-   -> VERDICT        : Moderate Resource Load (Periodic timers or asset weight)
-   -> DETAILS        : 1 throttled / timer-gated hook (periodic execution); 10 in-hook world queries (getSquare/getZombieList)
- [Tier 4 (Lightweight)]  NeatUI Equipment                     (Score:  12 | Loops: 1 Perm | Size:   1.55 MB)
+   -> DETAILS        : Massive 3D model injection (10241 models) causing 400-500ms chunk stalls; Heavy texture pack (170.79 MB of textures) causing high VRAM consumption
+ [Tier 4 (Lightweight)]  '87 Ford B700/F700 Trucks            (Score:  19 | Loops: 1 Perm, 0 Trans, 1 Throt | Size: 14.68 MB)
+   -> POTENTIAL SPIKE: ~5-15 ms [Minor Blip] | Frame Tax: +0.47 ms/frame
+   -> TRIGGER EVENT  : Continuous (Every Single Frame)
+   -> VERDICT        : Safe / Lightweight (Minimal runtime impact)
+ [Tier 4 (Lightweight)]  '82 Jeep J10                         (Score:  17 | Loops: 1 Perm | Size:  5.96 MB)
    -> POTENTIAL SPIKE: ~2-8 ms [Frame Delay] | Frame Tax: +0.45 ms/frame
    -> TRIGGER EVENT  : Continuous (Every Single Frame)
    -> VERDICT        : Safe / Lightweight (Minimal runtime impact)
- [Tier 4 (Lightweight)]  Project Cook                         (Score:   2 | Loops: 0 Perm, 1 Trans, 0 Throt | Size:   7.17 MB)
-   -> POTENTIAL SPIKE: < 1 ms [Imperceptible] | Frame Tax: +0.12 ms/frame
-   -> TRIGGER EVENT  : None (Passive / Static UI)
-   -> VERDICT        : Safe / Harmless (Transient / self-terminating hooks with zero background cost)
- [Tier 4 (Lightweight)]  ZombieBuddy                          (Score:   0 | Loops: 0 Perm | Size:   0.36 MB)
-   -> POTENTIAL SPIKE: ~10-35 ms [Combat Hitch] | Frame Tax: +0.00 ms/frame
-   -> TRIGGER EVENT  : Horde Proximity & Combat
    -> VERDICT        : Safe / Lightweight (Minimal runtime impact)
  [Tier 4 (Lightweight)]  Clean Dirt                           (Score:   0 | Loops: 0 Perm | Size:   0.05 MB)
    -> POTENTIAL SPIKE: < 1 ms [Imperceptible] | Frame Tax: +0.00 ms/frame
