@@ -1,6 +1,6 @@
 <# :
 @echo off
-title Project Zomboid Mod Performance ^& Optimization Suite v2.3.0
+title Project Zomboid Mod Performance ^& Optimization Suite v2.4.0
 color 0F
 powershell -NoProfile -ExecutionPolicy Bypass -Command "& ([scriptblock]::Create([System.IO.File]::ReadAllText('%~f0'))) %*"
 echo.
@@ -9,10 +9,11 @@ exit /b
 #>
 <#
 .SYNOPSIS
-    Project Zomboid Mod Performance & Optimization Suite v2.3.0
+    Project Zomboid Mod Performance & Optimization Suite v2.4.0
 .DESCRIPTION
     Comprehensive diagnostic scanner and optimization toolkit for Project Zomboid (Build 42 & 41).
-    Features Global Modpack Runtime Budget & Cumulative Loop Density, GPU VRAM Eviction & Texture
+    Features Multi-Culprit Telemetry Correlation Ranking, End-to-End Multi-Phase Loading Bar,
+    Global Modpack Runtime Budget & Cumulative Loop Density, GPU VRAM Eviction & Texture
     Thrashing Detector, Mass Vehicle Fleet Stacking Aggregator, Chunk Meshing Traversal Telemetry,
     Potential Frame Spike & Stutter Prediction (ms), Continuous Frame Time Tax (+ms/frame),
     and 1-click engine tuning for Java GC, frame caps, and savegame hygiene.
@@ -644,7 +645,7 @@ function Get-ModStutterMetrics {
 # ==============================================================================
 function Invoke-PZScanEngine([string]$CustomServerIni = "", [switch]$LocalWorkshopOnly, [string]$CustomWorkshopPath = "") {
     Write-Host "`n=================================================================" -ForegroundColor Cyan
-    Write-Host "   PROJECT ZOMBOID MOD PERFORMANCE & OPTIMIZATION SUITE v2.3.0  " -ForegroundColor Yellow
+    Write-Host "   PROJECT ZOMBOID MOD PERFORMANCE & OPTIMIZATION SUITE v2.4.0  " -ForegroundColor Yellow
     Write-Host "         Created by @KodeMannn with the help of Gemini          " -ForegroundColor DarkCyan
     Write-Host "=================================================================`n" -ForegroundColor Cyan
 
@@ -816,8 +817,9 @@ function Invoke-PZScanEngine([string]$CustomServerIni = "", [switch]$LocalWorksh
 
     foreach ($modId in $activeMods) {
         $currentIdx++
-        $percent = [math]::Round(($currentIdx / $activeMods.Count) * 100)
-        Write-Progress -Activity "Auditing Project Zomboid Mods" -Status "[$currentIdx/$($activeMods.Count)] Scanning: $modId" -PercentComplete $percent
+        $percent = [math]::Round(($currentIdx / $activeMods.Count) * 65)
+        $displayStatus = if ($modTitles[$modId]) { $modTitles[$modId] } else { $modId }
+        Write-Progress -Activity "Project Zomboid Mod Diagnostic Engine" -Status "Phase 1/4: Auditing Mod Files & Lua Code ($currentIdx / $($activeMods.Count)) - $displayStatus" -PercentComplete $percent
 
         $dir = $modLocations[$modId]
         if (-not $dir -or -not (Test-Path $dir)) {
@@ -1032,7 +1034,7 @@ function Invoke-PZScanEngine([string]$CustomServerIni = "", [switch]$LocalWorksh
         }
     }
 
-    Write-Progress -Activity "Auditing Project Zomboid Mods" -Completed
+    Write-Progress -Activity "Project Zomboid Mod Diagnostic Engine" -Status "Phase 2/4: Classifying File Collisions & Script Overrides..." -PercentComplete 75
 
     # Find and classify file collisions
     $collisions = @()
@@ -1093,6 +1095,7 @@ function Invoke-PZScanEngine([string]$CustomServerIni = "", [switch]$LocalWorksh
     }
 
     # Parse runtime logs safely (even while PZ is actively running)
+    Write-Progress -Activity "Project Zomboid Mod Diagnostic Engine" -Status "Phase 3/4: Parsing Engine Telemetry & Slow Frames (console.txt)..." -PercentComplete 85
     $consoleLog = Join-Path $ZomboidUserPath "console.txt"
     $slowFrames = @()
     $vramReport = "N/A"
@@ -1210,7 +1213,18 @@ function Invoke-PZScanEngine([string]$CustomServerIni = "", [switch]$LocalWorksh
         }
     }
 
+    Write-Progress -Activity "Project Zomboid Mod Diagnostic Engine" -Status "Phase 4/4: Correlating Telemetry with Stutter Culprits & Compiling Rankings..." -PercentComplete 95
+
     $sortedMods = $modReports | Sort-Object -Property RiskScore -Descending
+
+    # Top Correlated Culprit Analysis
+    $topSpikeMods = @($sortedMods | Where-Object { $_.SpikeSeverity -in @("CRITICAL", "HIGH", "MODERATE") } | Select-Object -First 3)
+    if ($topSpikeMods.Count -eq 0) {
+        $topSpikeMods = @($sortedMods | Select-Object -First 3)
+    }
+    $topVramMods = @($sortedMods | Where-Object { $_.TextureMB -ge 5 } | Sort-Object -Property TextureMB -Descending | Select-Object -First 3)
+    $topMeshMods = @($sortedMods | Where-Object { $_.ModelCount -ge 20 } | Sort-Object -Property ModelCount -Descending | Select-Object -First 3)
+    $topCpuMods = @($sortedMods | Where-Object { $_.PermanentHooks -gt 0 -or $_.InHookWorldQueries -gt 0 } | Sort-Object -Property { ($_.PermanentHooks * 0.45) + ($_.InHookWorldQueries * 0.08) } -Descending | Select-Object -First 3)
 
     # Compute Global Modpack Totals & Loop Density
     $totalPermHooks = ($modReports | Measure-Object -Property PermanentHooks -Sum).Sum
@@ -1239,6 +1253,9 @@ function Invoke-PZScanEngine([string]$CustomServerIni = "", [switch]$LocalWorksh
     if (-not $vehicleModels) { $vehicleModels = 0 }
     $vehicleTexMB = if ($vehicleMods) { [math]::Round(($vehicleMods | Measure-Object -Property TextureMB -Sum).Sum, 2) } else { 0 }
 
+    # Complete Progress Bar before displaying summary
+    Write-Progress -Activity "Project Zomboid Mod Diagnostic Engine" -Completed
+
     # Display summary
     Write-Host "`n-----------------------------------------------------------------" -ForegroundColor Gray
     Write-Host "   RUNTIME ENGINE TELEMETRY SUMMARY" -ForegroundColor Cyan
@@ -1248,6 +1265,10 @@ function Invoke-PZScanEngine([string]$CustomServerIni = "", [switch]$LocalWorksh
     if ($maxEvictions -gt 0) {
         Write-Host "   [!] GPU Thrashing  : $maxEvictions texture evictions ($maxEvictedMb MiB swapped across PCIe)!" -ForegroundColor Red
         Write-Host "       Cause & Impact : VRAM saturated; PCIe texture swapping causes 100-250ms render hitching" -ForegroundColor Yellow
+        if ($topVramMods.Count -gt 0) {
+            $vramCulprits = ($topVramMods | ForEach-Object { "$($_.ModName) ($($_.TextureMB) MB)" }) -join ", "
+            Write-Host "       Top VRAM Loads : $vramCulprits" -ForegroundColor DarkYellow
+        }
     }
     Write-Host " Java Heap Allocation : $heapReport" -ForegroundColor White
     Write-Host " JVM Garbage Collector: $gcReport" -ForegroundColor $gcColor
@@ -1256,14 +1277,25 @@ function Invoke-PZScanEngine([string]$CustomServerIni = "", [switch]$LocalWorksh
         $maxSlow = ($slowFrames | Measure-Object -Property DurationMs -Maximum).Maximum
         Write-Host " Worst Frame Spike    : $maxSlow ms" -ForegroundColor Red
         
-        $topSpikeMod = $sortedMods | Where-Object { $_.SpikeSeverity -in @("CRITICAL", "HIGH") } | Select-Object -First 1
-        if ($topSpikeMod) {
-            Write-Host "   -> CORRELATION    : Strongly correlates with [$($topSpikeMod.ModName)] (predicted: $($topSpikeMod.PotentialSpike))" -ForegroundColor Yellow
+        if ($topSpikeMods.Count -gt 0) {
+            Write-Host "   -> TOP CORRELATED SPIKE CULPRITS:" -ForegroundColor Yellow
+            $cIdx = 0
+            foreach ($tsm in $topSpikeMods) {
+                $cIdx++
+                $modDisplay = $tsm.ModName
+                if ($modDisplay.Length -gt 32) { $modDisplay = $modDisplay.Substring(0, 29) + "..." }
+                $modDisplay = $modDisplay.PadRight(32)
+                Write-Host "      [$cIdx] $modDisplay | Pred: $($tsm.PotentialSpike.PadRight(28)) | $($tsm.StutterTrigger)" -ForegroundColor DarkYellow
+            }
         }
     }
     if ($maxChunkBuilds -gt 0) {
         $chunkColor = if ($maxChunkBuilds -ge 50) { "Red" } elseif ($maxChunkBuilds -ge 20) { "Yellow" } else { "Gray" }
         Write-Host " Chunk Cache Hitches  : Up to $maxChunkBuilds mesh builds/chunk (Peak rebuild stall: $($maxChunkDuration) ms)" -ForegroundColor $chunkColor
+        if ($topMeshMods.Count -gt 0) {
+            $meshCulprits = ($topMeshMods | ForEach-Object { "$($_.ModName) ($($_.ModelCount) meshes)" }) -join ", "
+            Write-Host "   -> Top 3D Meshes   : $meshCulprits" -ForegroundColor DarkYellow
+        }
     }
     Write-Host " File Override Clashes: $($collisions.Count) detected ($($safeCollisions.Count) Safe, $($riskyCollisions.Count) High/Moderate Risk)" -ForegroundColor $(if ($riskyCollisions.Count -gt 0) { "Red" } elseif ($collisions.Count -gt 0) { "Green" } else { "Green" })
 
@@ -1274,6 +1306,10 @@ function Invoke-PZScanEngine([string]$CustomServerIni = "", [switch]$LocalWorksh
     Write-Host " Cumulative Mod Frame Tax : +$totalFrameTaxRaw ms/frame (Continuous CPU tick overhead)" -ForegroundColor $(if ($totalFrameTaxRaw -ge 15.0) { "Red" } elseif ($totalFrameTaxRaw -ge 5.0) { "Yellow" } else { "Green" })
     Write-Host " Active Per-Frame Loops   : $totalPermHooks permanent hooks firing every single frame" -ForegroundColor $(if ($totalPermHooks -ge 30) { "Red" } elseif ($totalPermHooks -ge 15) { "Yellow" } else { "Green" })
     Write-Host " Total Custom 3D Models   : $totalModModels meshes ($totalModTexMB MB textures across mods)" -ForegroundColor $(if ($totalModModels -ge 3000) { "Red" } elseif ($totalModModels -ge 1000) { "Yellow" } else { "Green" })
+    if ($topCpuMods.Count -gt 0) {
+        $cpuCulprits = ($topCpuMods | ForEach-Object { "$($_.ModName) ($($_.FrameTax))" }) -join ", "
+        Write-Host "   -> Top CPU Tick Tax: $cpuCulprits" -ForegroundColor DarkCyan
+    }
 
     if ($totalPermHooks -ge 15) {
         Write-Host "`n [ALERT] High Loop Density: Cumulative 'death by 1,000 cuts' detected!" -ForegroundColor Red
@@ -1362,7 +1398,7 @@ function Invoke-PZScanEngine([string]$CustomServerIni = "", [switch]$LocalWorksh
     # Generate Markdown Report
     $md = @()
     $md += "# Project Zomboid Mod Performance & Optimization Diagnostic Report"
-    $md += "*Generated: $(Get-Date -Format 'yyyy-MM-dd HH:mm:ss') on $env:COMPUTERNAME by PZ-Mod-Performance-Suite v2.3.0 (Coded with the help of Google Gemini)*"
+    $md += "*Generated: $(Get-Date -Format 'yyyy-MM-dd HH:mm:ss') on $env:COMPUTERNAME by PZ-Mod-Performance-Suite v2.4.0 (Coded with the help of Google Gemini)*"
     $md += ""
     $md += "## Executive Summary"
     $md += "- **Game Version:** $pzVersion"
@@ -1378,6 +1414,10 @@ function Invoke-PZScanEngine([string]$CustomServerIni = "", [switch]$LocalWorksh
         $md += "- **GPU VRAM Thrashing:** $maxEvictions texture evictions ($maxEvictedMb MiB swapped to RAM across PCIe) - High Stutter Risk"
     }
     $md += "- **Worst Recorded Hitch:** $(if ($slowFrames.Count -gt 0) { "$maxSlow ms" } else { "None" })"
+    if ($topSpikeMods.Count -gt 0) {
+        $spikeCulpritsMd = ($topSpikeMods | ForEach-Object { "**$($_.ModName)** ($($_.PotentialSpike))" }) -join "; "
+        $md += "- **Top Correlated Spike Culprits:** $spikeCulpritsMd"
+    }
     if ($maxChunkBuilds -gt 0) {
         $md += "- **Chunk Meshing Peak:** $maxChunkBuilds builds ($maxChunkDuration ms rebuild stall)"
     }
@@ -1395,6 +1435,19 @@ function Invoke-PZScanEngine([string]$CustomServerIni = "", [switch]$LocalWorksh
     $md += "| **Total Texture Footprint** | $totalModTexMB MB | < 500 MB | $(if ($totalModTexMB -ge 1500) { '**CRITICAL (VRAM exhaustion)**' } elseif ($totalModTexMB -ge 500) { '**HIGH (VRAM pressure)**' } else { 'Optimal' }) |"
     $md += "| **GPU Texture Evictions (PCIe Swaps)** | $maxEvictions ($maxEvictedMb MiB) | 0 evictions | $(if ($maxEvictions -gt 0) { '**ACTIVE THRASHING (Render freezes)**' } else { 'Optimal' }) |"
     $md += "| **Peak Chunk Cache Builds** | $maxChunkBuilds builds | < 20 builds | $(if ($maxChunkBuilds -ge 50) { '**HEAVY STALLS (Border traversal lag)**' } else { 'Normal' }) |"
+    $md += ""
+    if ($topVramMods.Count -gt 0) {
+        $vramCulpritsMd = ($topVramMods | ForEach-Object { "**$($_.ModName)** ($($_.TextureMB) MB)" }) -join ", "
+        $md += "- **Top Correlated VRAM Heavyweights:** $vramCulpritsMd"
+    }
+    if ($topMeshMods.Count -gt 0) {
+        $meshCulpritsMd = ($topMeshMods | ForEach-Object { "**$($_.ModName)** ($($_.ModelCount) meshes)" }) -join ", "
+        $md += "- **Top Correlated 3D Mesh Injectors:** $meshCulpritsMd"
+    }
+    if ($topCpuMods.Count -gt 0) {
+        $cpuCulpritsMd = ($topCpuMods | ForEach-Object { "**$($_.ModName)** ($($_.FrameTax))" }) -join ", "
+        $md += "- **Top Continuous CPU Tick Overhead:** $cpuCulpritsMd"
+    }
     $md += ""
     if ($vehicleCount -ge 15) {
         $md += "> [!WARNING]"
@@ -1499,7 +1552,7 @@ function Show-PZMainMenu {
     while ($true) {
         Clear-Host
         Write-Host "=================================================================" -ForegroundColor Cyan
-        Write-Host "   PROJECT ZOMBOID MOD PERFORMANCE & OPTIMIZATION SUITE v2.3.0  " -ForegroundColor Yellow
+        Write-Host "   PROJECT ZOMBOID MOD PERFORMANCE & OPTIMIZATION SUITE v2.4.0  " -ForegroundColor Yellow
         Write-Host "         Created by @KodeMannn with the help of Gemini          " -ForegroundColor DarkCyan
         Write-Host "=================================================================" -ForegroundColor Cyan
         Write-Host "  [1] Run Full Performance Diagnostic Scan (Active Save)" -ForegroundColor White

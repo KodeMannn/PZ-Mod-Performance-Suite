@@ -73,6 +73,12 @@ PZ-Mod-Performance-Suite features 8 selectable operations to fit your workflow:
 ## 🔍 Key Features
 
 * **⚡ Ultra-Fast Multi-Library Workshop Indexing:** Finds mods across all Steam drives (`C:`, `D:`, `E:`, `H:`, external NVMe SSDs) via `libraryfolders.vdf`.
+* **🔗 Multi-Culprit Telemetry Correlation Engine (v2.4.0):** Deeply correlates recorded engine telemetry from `console.txt` across multiple bottleneck vectors:
+  * **Frame Hitch Culprits:** Identifies and ranks the top 3 mods contributing to the worst recorded frame spike with predicted freeze durations and trigger events.
+  * **GPU VRAM Thrashing Attributions:** Identifies the top 3 texture heavyweights responsible for saturated VRAM and PCIe bus paging freezes.
+  * **Chunk Cache Hitching:** Surfacing the top 3 3D mesh injectors causing chunk rebuild stalls during world traversal.
+  * **Continuous CPU Tick Drag:** Isolates the top 3 mods burning frame budget every single tick.
+* **⏳ Seamless Multi-Phase Loading Bar (v2.4.0):** Features an end-to-end 4-phase progress indicator (Mod Auditing $\rightarrow$ Collision Classification $\rightarrow$ Telemetry Parsing $\rightarrow$ Correlation Synthesis & Ranking) that keeps the console responsive with zero visual freeze before displaying results.
 * **🌐 Global Modpack Runtime Budget & Loop Density Engine (v2.3.0):** Solves the elusive "death by 1,000 cuts" where 50+ lightweight mods cumulatively overflow CPU frame budgets. Aggregates total persistent CPU tax (+ms/frame), counts active per-frame loops across the entire modpack, and fires High Loop Density alerts.
 * **🏎️ Mass Vehicle Fleet Stacking Aggregator (v2.3.0):** Flags when players accumulate 15+ vehicle mods running per-frame tachometer/speedometer loops (e.g. `DorothyAnemometer`), revealing cumulative frame tax (+6.75 ms/frame) and thousands of loaded vehicle meshes.
 * **🎮 GPU VRAM Eviction & Texture Thrashing Detector (v2.3.0):** Telemetry-based detector that parses Build 42 deferred renderer logs for texture evictions across the PCIe bus, identifying the root cause of 100–250ms render-thread freezes while running or driving.
@@ -86,7 +92,6 @@ PZ-Mod-Performance-Suite features 8 selectable operations to fit your workflow:
   * `< 1 ms [Imperceptible]`: Harmless UI, texture replacements, or benign passive mods.
 * **📈 Continuous Frame Time Tax (+ms/frame):** Calculates exact persistent CPU cost added to every frame budget (e.g., `+1.38 ms/frame`).
 * **🎯 Stutter Trigger Scenario Classification:** Identifies exact gameplay triggers causing lag (`Chunk Border Traversal & High-Speed Driving`, `Horde Proximity & Combat`, `Action: Transcribing / Reading XP`, `Vehicle Spawn & Streaming`, etc.).
-* **🔗 Runtime Telemetry Correlation:** Correlates real recorded `Worst Frame Spike` in `console.txt` directly with the top predicted offender mod.
 * **🧠 Intelligent Semantic Lua Auditor:** Evaluates Lua code semantics to differentiate:
   * **Permanent Loops:** Unconstrained hooks executing every frame at 100–240 FPS (heavily penalized).
   * **Transient Hooks:** Self-terminating hooks with `.Remove` calls (UI listeners, 1-tick bootstrappers, retry loops) that cost virtually zero at runtime.
@@ -129,13 +134,13 @@ PZ-Mod-Performance-Suite features 8 selectable operations to fit your workflow:
 
 ```text
 =================================================================
-   PROJECT ZOMBOID MOD PERFORMANCE & OPTIMIZATION SUITE v2.3.0  
+   PROJECT ZOMBOID MOD PERFORMANCE & OPTIMIZATION SUITE v2.4.0  
          Created by @KodeMannn with the help of Gemini          
 =================================================================
 
  [INFO] Detected Game Version: 42.21.0
- [INFO] Active Savegame: Outbreak / 2026-10-04_14-23-47
- [INFO] Total Enabled Mods to Audit: 174
+ [INFO] Active Savegame: Outbreak / 2026-10-04_15-14-47
+ [INFO] Total Enabled Mods to Audit: 60
 
  [*] Auditing Lua hooks, 3D meshes, texture packs, and file collisions...
 
@@ -145,21 +150,25 @@ PZ-Mod-Performance-Suite features 8 selectable operations to fit your workflow:
  Configured Frame Cap : 240 FPS (Active: 240 FPS)
  GPU VRAM Usage       : 1421 MB free of 12282 MB
    [!] GPU Thrashing  : 393 texture evictions (418 MiB swapped across PCIe)!
-       Cause & Impact : VRAM saturated; PCIe texture swapping causes 100-250ms render hitching
+       Top Heavyweights: KATTAJ1 Military Pack (54.06 MB), Realistic Dashboard (50.18 MB)
  Java Heap Allocation : 5733 MB used of 12704 MB
  JVM Garbage Collector: 0 Old Gen Freezes | Young Gen: 251 sweeps (avg 10.4 ms, 2605 ms total)
  Slow Frames (>50ms)  : 42 recorded in last session
- Worst Frame Spike    : 666.8 ms
-   -> CORRELATION    : Strongly correlates with [6261 3D models for Viewpoint] (predicted: ~350-550 ms [Severe Freeze])
+ Worst Frame Spike    : 456.9 ms
+   -> CORRELATION (1) : Strongly correlates with [Project A-Life [ALIFE NPCS]] (predicted: ~10-35 ms [Combat Hitch])
+   -> CORRELATION (2) : Also contributing: [Project A-Life - Jeem Extension] (predicted: ~10-35 ms [Combat Hitch])
+   -> CORRELATION (3) : Also contributing: [Vanilla Vehicles Animated] (predicted: ~20-60 ms [Micro-Stutter])
  Chunk Cache Hitches  : Up to 155 mesh builds/chunk (Peak rebuild stall: 10.6 ms)
+   -> TOP INJECTORS   : Vanilla Vehicles Animated (606 models), KATTAJ1 Clothes Core (257 models)
  File Override Clashes: 492 detected (488 Safe, 4 High/Moderate Risk)
 
 -----------------------------------------------------------------
    GLOBAL MODPACK RUNTIME BUDGET & LOOP DENSITY
 -----------------------------------------------------------------
- Cumulative Mod Frame Tax : +11.19 ms/frame (Continuous CPU tick overhead)
- Active Per-Frame Loops   : 19 permanent hooks firing every single frame
- Total Custom 3D Models   : 13092 meshes (1009.84 MB textures across mods)
+ Cumulative Mod Frame Tax : +20.35 ms/frame (Continuous CPU tick overhead)
+   -> TOP CPU TAX     : Project A-Life - Jeem Extension (+13.01 ms/frame), Project A-Life [ALIFE NPCS] (+5.53 ms/frame)
+ Active Per-Frame Loops   : 23 permanent hooks firing every single frame
+ Total Custom 3D Models   : 1420 meshes (185.12 MB textures across mods)
 
  [ALERT] High Loop Density: Cumulative 'death by 1,000 cuts' detected!
          Even if individual mods score lightweight (green), running 19 simultaneous
