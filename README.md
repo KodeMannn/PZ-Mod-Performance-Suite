@@ -33,6 +33,9 @@ Run interactive or automated scans with command-line flags:
 # Non-interactive automatic scan:
 .\Scan-PZModPerformance.ps1 -Auto
 
+# Audit only the Stutter & Lag Spike Impact Roster:
+.\Scan-PZModPerformance.ps1 -StutterRoster
+
 # Audit a dedicated server config:
 .\Scan-PZModPerformance.ps1 -ServerConfig "$env:USERPROFILE\Zomboid\Server\servertest.ini"
 
@@ -55,40 +58,43 @@ Run interactive or automated scans with command-line flags:
 
 ## 🚀 Suite Profiles & Operations
 
-PZ-Mod-Performance-Suite features 8 selectable operations to fit your workflow:
+PZ-Mod-Performance-Suite features 9 selectable operations to fit your workflow:
 
 | Profile | Action / Target | Typical Duration | Best For |
 | :--- | :--- | :--- | :--- |
-| **`[1] Full Diagnostic Scan`** *(Default)* | Active Save (`mods.txt`), Workshop, Lua Hooks, VRAM, Hitches | **~2.5 seconds** | Identifying lag-causing mods and stutter sources in your active save |
-| **`[2] Dedicated Server Scan`** | Dedicated server `.ini` files (`servertest.ini` or custom path) | **~2.5 seconds** | Auditing server modpacks for VPS, Pterodactyl, and Co-op hosts |
-| **`[3] Scan Local Workshop Mods`** | Local workshop development folder (`Zomboid\Workshop`) | **< 1 second** | Profiling custom mods under development before publishing to Steam |
-| **`[4] 1-Click Java GC Tuning`** | `ProjectZomboid64.json` launcher configuration | **< 1 second** | Eliminating 200–400ms periodic world freezes via low-latency G1GC |
-| **`[5] Safe Frame Cap Tuning`** | `options.ini` display frameRate setting | **< 1 second** | Throttling Lua tick execution overhead down from 240/uncapped FPS |
-| **`[6] Clean Phantom Mods`** | Active savegame `mods.txt` | **< 1 second** | Purging uninstalled ghost mods to stop console spam and speed up boot |
-| **`[7] Revert Changes / Backups`** | JVM config, FPS cap, and savegame mods | **< 1 second** | Safely restoring original `.bak` backups and vanilla engine settings |
-| **`[8] Open Last Report`** | `ModPerformanceReport.md` | **Instant** | Viewing detailed breakdown, conflict tables, and Discord summaries |
+| **`[1] Full Diagnostic Scan`** *(Default)* | Active Save (`mods.txt`), Workshop, Lua Hooks, VRAM, Hitches, Overrides | **~2.5 seconds** | Comprehensive performance & conflict audit of active save |
+| **`[2] Stutter & Lag Spike Roster`** | Focused 1-line stutter impact table across all active mods | **~2.5 seconds** | Instantly spotting which mods cause freezes without file clash noise |
+| **`[3] Dedicated Server Scan`** | Dedicated server `.ini` files (`servertest.ini` or custom path) | **~2.5 seconds** | Auditing server modpacks for VPS, Pterodactyl, and Co-op hosts |
+| **`[4] Scan Local Workshop Mods`** | Local workshop development folder (`Zomboid\Workshop`) | **< 1 second** | Profiling custom mods under development before publishing to Steam |
+| **`[5] 1-Click Java GC Tuning`** | `ProjectZomboid64.json` launcher configuration | **< 1 second** | Eliminating 200–400ms periodic world freezes via low-latency G1GC |
+| **`[6] Safe Frame Cap Tuning`** | `options.ini` display frameRate setting | **< 1 second** | Throttling Lua tick execution overhead down from 240/uncapped FPS |
+| **`[7] Clean Phantom Mods`** | Active savegame `mods.txt` | **< 1 second** | Purging uninstalled ghost mods to stop console spam and speed up boot |
+| **`[8] Revert Changes / Backups`** | JVM config, FPS cap, and savegame mods | **< 1 second** | Safely restoring original `.bak` backups and vanilla engine settings |
+| **`[9] Open Last Report`** | `ModPerformanceReport.md` | **Instant** | Viewing detailed breakdown, conflict tables, and Discord summaries |
 
 ---
 
 ## 🔍 Key Features
 
 * **⚡ Ultra-Fast Multi-Library Workshop Indexing:** Finds mods across all Steam drives (`C:`, `D:`, `E:`, `H:`, external NVMe SSDs) via `libraryfolders.vdf`.
+* **📋 Full Stutter & Lag Spike Impact Roster (v2.6.0):** Clean, 1-line tabular roster displaying every active mod with predicted frame spike bounds, severity status, and exact gameplay trigger events. Replaces visual clutter with unified per-row severity colors (Red for Tier 1, Yellow for Tier 2, DarkYellow for Tier 3, DarkGray for Tier 4).
+* **🎯 Expanded Top 5 Correlated Spike Culprits (v2.6.0):** Deeply correlates recorded engine slow frames across the top 5 contributing mods with actionable root cause attribution.
 * **🩺 Precision Slow Frame Anatomy Dissection (v2.5.0):** Dissects every slow-frame log line in Build 42 into its component sub-stalls:
   * **Main vs. Render Thread Origin:** Distinguishes CPU simulation freezes from GPU draw stalls.
   * **Java GC Pauses vs. Chunk Meshing:** Measures the exact millisecond pause caused by JVM garbage collection sweeps (`the collector's pauses`) versus geometry compilation (`chunk cache builds`).
-  * **Actionable Root Cause:** Pinpoints whether a spike requires JVM G1GC tuning (Option `[4]`) or custom 3D model trimming.
-* **🛡️ Causal Bottleneck Filtering (v2.5.0 - Zero False Mod Accusations):** Prevents innocent Lua UI or QOL mods from being falsely blamed for world hitches. If an engine freeze is caused by Java GC sweeps or chunk meshing, the suite attributes the stall directly to JVM memory or 3D mesh packs, keeping QOL mod ratings clean and accurate.
-* **⏱️ Hardware Frame Times & Simulation Headroom (v2.5.0):** Extracts real-time GPU render times, Render CPU frame times, and Main Thread simulation duration (`main thread frame 9.70 ms -> 103 FPS headroom`) alongside active loaded zombie counts.
-* **🔗 Multi-Culprit Telemetry Correlation Engine (v2.4.0):** Deeply correlates recorded engine telemetry from `console.txt` across multiple bottleneck vectors:
-  * **Frame Hitch Culprits:** Identifies and ranks the top 3 mods contributing to the worst recorded frame spike with predicted freeze durations and trigger events.
-  * **GPU VRAM Thrashing Attributions:** Identifies the top 3 texture heavyweights responsible for saturated VRAM and PCIe bus paging freezes.
-  * **Chunk Cache Hitching:** Surfacing the top 3 3D mesh injectors causing chunk rebuild stalls during world traversal.
-  * **Continuous CPU Tick Drag:** Isolates the top 3 mods burning frame budget every single tick.
-* **⏳ Seamless Multi-Phase Loading Bar (v2.4.0):** Features an end-to-end 4-phase progress indicator (Mod Auditing $\rightarrow$ Collision Classification $\rightarrow$ Telemetry Parsing $\rightarrow$ Correlation Synthesis & Ranking) that keeps the console responsive with zero visual freeze before displaying results.
-* **🌐 Global Modpack Runtime Budget & Loop Density Engine (v2.3.0):** Solves the elusive "death by 1,000 cuts" where 50+ lightweight mods cumulatively overflow CPU frame budgets. Aggregates total persistent CPU tax (+ms/frame), counts active per-frame loops across the entire modpack, and fires High Loop Density alerts.
-* **🏎️ Mass Vehicle Fleet Stacking Aggregator (v2.3.0):** Flags when players accumulate 15+ vehicle mods running per-frame tachometer/speedometer loops (e.g. `DorothyAnemometer`), revealing cumulative frame tax (+6.75 ms/frame) and thousands of loaded vehicle meshes.
-* **🎮 GPU VRAM Eviction & Texture Thrashing Detector (v2.3.0):** Telemetry-based detector that parses Build 42 deferred renderer logs for texture evictions across the PCIe bus, identifying the root cause of 100–250ms render-thread freezes while running or driving.
-* **🗺️ Chunk Cache Meshing Traversal Telemetry (v2.3.0):** Monitors chunk boundary mesh builds and rebuild stalls, isolating stutter caused by massive 3D model injections when crossing world boundaries.
+  * **Actionable Root Cause:** Pinpoints whether a spike requires JVM G1GC tuning (Option `[5]`) or custom 3D model trimming.
+* **🛡️ Causal Bottleneck Filtering (Zero False Mod Accusations):** Prevents innocent Lua UI or QOL mods from being falsely blamed for world hitches. If an engine freeze is caused by Java GC sweeps or chunk meshing, the suite attributes the stall directly to JVM memory or 3D mesh packs, keeping QOL mod ratings clean and accurate.
+* **⏱️ Hardware Frame Times & Simulation Headroom:** Extracts real-time GPU render times, Render CPU frame times, and Main Thread simulation duration (`main thread frame 9.70 ms -> 103 FPS headroom`) alongside active loaded zombie counts.
+* **🔗 Multi-Culprit Telemetry Correlation Engine:** Deeply correlates recorded engine telemetry from `console.txt` across multiple bottleneck vectors:
+  * **Frame Hitch Culprits:** Identifies and ranks the top 5 mods contributing to the worst recorded frame spike with predicted freeze durations and trigger events.
+  * **GPU VRAM Thrashing Attributions:** Identifies the top 5 texture heavyweights responsible for saturated VRAM and PCIe bus paging freezes.
+  * **Chunk Cache Hitching:** Surfacing the top 5 3D mesh injectors causing chunk rebuild stalls during world traversal.
+  * **Continuous CPU Tick Drag:** Isolates the top 5 mods burning frame budget every single tick.
+* **⏳ Seamless Multi-Phase Loading Bar:** Features an end-to-end 4-phase progress indicator (Mod Auditing $\rightarrow$ Collision Classification $\rightarrow$ Telemetry Parsing $\rightarrow$ Correlation Synthesis & Ranking) that keeps the console responsive with zero visual freeze before displaying results.
+* **🌐 Global Modpack Runtime Budget & Loop Density Engine:** Solves the elusive "death by 1,000 cuts" where 50+ lightweight mods cumulatively overflow CPU frame budgets. Aggregates total persistent CPU tax (+ms/frame), counts active per-frame loops across the entire modpack, and fires High Loop Density alerts.
+* **🏎️ Mass Vehicle Fleet Stacking Aggregator:** Flags when players accumulate 15+ vehicle mods running per-frame tachometer/speedometer loops (e.g. `DorothyAnemometer`), revealing cumulative frame tax (+6.75 ms/frame) and thousands of loaded vehicle meshes.
+* **🎮 GPU VRAM Eviction & Texture Thrashing Detector:** Telemetry-based detector that parses Build 42 deferred renderer logs for texture evictions across the PCIe bus, identifying the root cause of 100–250ms render-thread freezes while running or driving.
+* **🗺️ Chunk Cache Meshing Traversal Telemetry:** Monitors chunk boundary mesh builds and rebuild stalls, isolating stutter caused by massive 3D model injections when crossing world boundaries.
 * **🔒 Safe Concurrent Log Streaming:** Uses non-locking `[System.IO.FileShare]::ReadWrite` streams to safely run scans and parse telemetry even while Project Zomboid is actively running.
 * **⏱️ Static Code Risk Prediction Engine (v2.2.0):** Estimates concrete worst-case freeze durations based on structural code intensity and asset weight:
   * `~350-550 ms [Severe Freeze]`: Massive 3D model injections causing chunk meshing stalls.
@@ -139,23 +145,20 @@ PZ-Mod-Performance-Suite features 8 selectable operations to fit your workflow:
 ## 📊 Sample Output
 
 ```text
+
 =================================================================
-   PROJECT ZOMBOID MOD PERFORMANCE & OPTIMIZATION SUITE v2.5.0  
+   PROJECT ZOMBOID MOD PERFORMANCE & OPTIMIZATION SUITE v2.6.0  
          Created by @KodeMannn with the help of Gemini          
 =================================================================
 
  [INFO] Detected Game Version: 42.21.0
  [INFO] Active Savegame: Outbreak / 2026-10-04_16-33-03
- [INFO] Total Enabled Mods to Audit: 59
-
- [*] Auditing Lua hooks, 3D meshes, texture packs, and file collisions...
+ [INFO] Total Enabled Mods to Audit: 56
 
 -----------------------------------------------------------------
    RUNTIME ENGINE TELEMETRY SUMMARY
 -----------------------------------------------------------------
  Configured Frame Cap : 240 FPS (Active: 240 FPS)
- Hardware Frame Times : GPU: 8.59 ms | Render CPU: 7.58 ms | Main Thread: 9.70 ms (~103 FPS cap)
- Live World Simulation: 88 active zombies loaded in simulation radius (89 in-game FPS)
  GPU VRAM Usage       : 2381 MB free of 12282 MB
    [!] GPU Thrashing  : 2 texture evictions (32 MiB swapped across PCIe)!
        Top VRAM Loads : 6261 3D models for Viewpoint (170.79 MB), KATTAJ1 Military Pack (54.06 MB)
@@ -166,70 +169,40 @@ PZ-Mod-Performance-Suite features 8 selectable operations to fit your workflow:
    -> SPIKE ANATOMY   : 425.1 ms Engine & GC Pauses (95.2%) | 21.3 ms Chunk Meshing & Passes (4.8%)
    -> ROOT CAUSE      : Severe Java Garbage Collection Freeze (Engine Memory Sweep)
    -> ATTRIBUTION     : JVM Heap Garbage Collection. NOT caused by Lua UI or QOL mods.
-   -> ACTIONABLE FIX  : Apply Menu Option [4] (One-Click G1GC + 5ms Pause Tuning) to eliminate GC freezes.
-   -> CORRELATED MODS :
-      [1] 6261 3D models for Viewpoint... | Pred: ~350-550 ms [Severe Freeze]  | Chunk Border Traversal
- Chunk Cache Hitches  : Up to 51 mesh builds/chunk (Peak rebuild stall: 33.4 ms)
-   -> Top 3D Meshes   : 6261 3D models for Viewpoint (10241 meshes), Vanilla Vehicles Animated (606 meshes)
- File Override Clashes: 457 detected (455 Safe, 2 High/Moderate Risk)
+   -> ACTIONABLE FIX  : Apply Menu Option [5] (One-Click G1GC + 5ms Pause Tuning) to eliminate GC freezes.
+   -> TOP CORRELATED SPIKE CULPRITS:
+      [1] 6261 3D models for Viewpoint ... | Pred: ~350-550 ms [Severe Freeze]  | Chunk Border Traversal & High-Speed Driving
+      [2] Project Viewpoint QOL            | Pred: ~10-35 ms [Combat Hitch]     | Horde Proximity & Combat
+      [3] Functional Appliances 2          | Pred: ~10-35 ms [Combat Hitch]     | Horde Proximity & Combat
+      [4] ZombieBuddy                      | Pred: ~10-35 ms [Combat Hitch]     | Horde Proximity & Combat
+      [5] NeatUI XP Drop                   | Pred: ~2-8 ms [Frame Delay]        | Continuous (Every Single Frame)
+ Chunk Cache Hitches  : Up to 40 mesh builds/chunk (Peak rebuild stall: 100.1 ms)
+   -> Top 3D Meshes   : 6261 3D models for Viewpoint [sour_kisel] (10241 meshes), Fluffy Hair (163 meshes)
+ File Override Clashes: 433 detected (431 Safe, 2 High/Moderate Risk)
 
 -----------------------------------------------------------------
    GLOBAL MODPACK RUNTIME BUDGET & LOOP DENSITY
 -----------------------------------------------------------------
  Cumulative Mod Frame Tax : +2.58 ms/frame (Continuous CPU tick overhead)
  Active Per-Frame Loops   : 2 permanent hooks firing every single frame
- Total Custom 3D Models   : 11375 meshes (340.8 MB textures across mods)
-   -> Top CPU Tick Tax: NeatUI Equipment (+0.45 ms/frame), NeatUI XP Drop (+0.45 ms/frame), Project Viewpoint QOL (+0.76 ms/frame)
-
- [ALERT] High Loop Density: Cumulative 'death by 1,000 cuts' detected!
-         Even if individual mods score lightweight (green), running 19 simultaneous
-         per-frame Lua hooks eats CPU headroom and causes stuttering during movement.
-
- [MASS VEHICLE FLEET WARNING] 88 vehicle mods active (15 loops running)!
-         Vehicle mods register per-frame speed/gauge hooks (e.g. DorothyAnemometer).
-         Combined, your vehicle fleet contributes +6.75 ms/frame overhead & 1773 meshes.
-         Recommendation: Trim vehicle mods you aren't currently driving.
+ Total Custom 3D Models   : 10512 meshes (285.77 MB textures across mods)
+   -> Top CPU Tick Tax: NeatUI XP Drop (+0.45 ms/frame), NeatUI Equipment (+0.45 ms/frame), Project Viewpoint QOL (+0.76 ms/frame)
 
 -----------------------------------------------------------------
-   ACTIVE MODS RANKED BY STUTTER & PERFORMANCE IMPACT
+   ACTIVE MODS RANKED BY STUTTER & LAG SPIKE POTENTIAL
+   (Worst-case burst prediction & trigger scenario across all active mods)
 -----------------------------------------------------------------
- [Tier 1 (CRITICAL)]     6261 3D models for Viewpoint [sou... (Score: 100 | Loops: 0 Perm | Size: 329.19 MB)
-   -> POTENTIAL SPIKE: ~350-550 ms [Severe Freeze] | Frame Tax: +0.00 ms/frame
-   -> TRIGGER EVENT  : Chunk Border Traversal & High-Speed Driving
-   -> VERDICT        : Severe Chunk Meshing Freezes & Heavy VRAM Load
-   -> DETAILS        : Massive 3D model injection (10241 models) causing 400-500ms chunk stalls; Heavy texture pack (170.79 MB of textures) causing high VRAM consumption
- [Tier 4 (Lightweight)]  '87 Ford B700/F700 Trucks            (Score:  19 | Loops: 1 Perm, 0 Trans, 1 Throt | Size: 14.68 MB)
-   -> POTENTIAL SPIKE: ~5-15 ms [Minor Blip] | Frame Tax: +0.47 ms/frame
-   -> TRIGGER EVENT  : Continuous (Every Single Frame)
-   -> VERDICT        : Safe / Lightweight (Minimal runtime impact)
- [Tier 4 (Lightweight)]  '82 Jeep J10                         (Score:  17 | Loops: 1 Perm | Size:  5.96 MB)
-   -> POTENTIAL SPIKE: ~2-8 ms [Frame Delay] | Frame Tax: +0.45 ms/frame
-   -> TRIGGER EVENT  : Continuous (Every Single Frame)
-   -> VERDICT        : Safe / Lightweight (Minimal runtime impact)
-   -> VERDICT        : Safe / Lightweight (Minimal runtime impact)
- [Tier 4 (Lightweight)]  Clean Dirt                           (Score:   0 | Loops: 0 Perm | Size:   0.05 MB)
-   -> POTENTIAL SPIKE: < 1 ms [Imperceptible] | Frame Tax: +0.00 ms/frame
-   -> TRIGGER EVENT  : None (Passive / Static UI)
-   -> VERDICT        : Safe / Lightweight (Minimal runtime impact)
-
------------------------------------------------------------------
-   DETECTED MOD FILE OVERRIDE CONFLICTS
------------------------------------------------------------------
- Total File Overlaps: 161 (159 Safe, 2 High/Moderate Risk)
-
- [ALERT] High-Risk Code / Script Overrides (2 detected):
-   [!] media/lua/client/fwoscript.lua
-       Category: Executable Lua Script
-       Impact:   Executable Lua code override; one mod completely overwrites the other
-       Mods:     FWO Working Bench Press & Treadmill, FWO Fitness Workout Overhaul
-
- [SAFE] Safe Overrides (159 harmless files):
-        159 files are SAFE translation merges, shared UI icons, or Git metadata.
-   [SAFE] media/lua/shared/translate/ptbr/sandbox.json (Translation Merge)
-   ... and 158 more safe files (see ModPerformanceReport.md)
-
- [SUCCESS] Full Diagnostic Report saved to: ModPerformanceReport.md
-=================================================================
+  Rank Mod Name                         | Spike Potential (Predicted Burst)  | Trigger Scenario
+ ----- -------------------------------- | ---------------------------------- | -----------------------------------
+ [01]  6261 3D models for Viewpoint ... | Pred: ~350-550 ms [Severe Freeze]  | Chunk Border Traversal & High-Speed Driving
+ [02]  Project Viewpoint QOL            | Pred: ~10-35 ms [Combat Hitch]     | Horde Proximity & Combat
+ [03]  Functional Appliances 2          | Pred: ~10-35 ms [Combat Hitch]     | Horde Proximity & Combat
+ [04]  NeatUI XP Drop                   | Pred: ~2-8 ms [Frame Delay]        | Continuous (Every Single Frame)
+ [05]  NeatUI Equipment                 | Pred: ~2-8 ms [Frame Delay]        | Continuous (Every Single Frame)
+ [06]  Push Vehicle                     | Pred: ~5-15 ms [Minor Blip]        | Vehicle Spawn & Streaming
+ [07]  Fluffy Hair                      | Pred: < 1 ms [Imperceptible]       | None (Passive / Static UI)
+ [08]  Realistic Dashboard and Gauges   | Pred: ~5-15 ms [Minor Blip]        | Periodic Timer (~Every 5-10s)
+ ...
 ```
 
 ---
