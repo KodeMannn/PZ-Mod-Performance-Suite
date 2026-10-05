@@ -1,6 +1,6 @@
 <# :
 @echo off
-title Project Zomboid Mod Performance ^& Optimization Suite v2.12.0
+title Project Zomboid Mod Performance ^& Optimization Suite v2.12.1
 color 0F
 powershell -NoProfile -ExecutionPolicy Bypass -Command "& ([scriptblock]::Create([System.IO.File]::ReadAllText('%~f0'))) %*"
 echo.
@@ -9,7 +9,7 @@ exit /b
 #>
 <#
 .SYNOPSIS
-    Project Zomboid Mod Performance & Optimization Suite v2.12.0
+    Project Zomboid Mod Performance & Optimization Suite v2.12.1
 .DESCRIPTION
     Comprehensive diagnostic scanner and optimization toolkit for Project Zomboid (Build 42 & 41).
     Features Precision Slow Frame Anatomy Dissection (Main vs Render Thread, GC pauses vs Chunk Cache),
@@ -847,7 +847,7 @@ function Get-ModStutterMetrics {
         $spikeSeverity = "LOW"
     }
 
-    # 2. Continuous Frame Time Tax (+X.XX ms / frame)
+    # 2. Continuous & Peak Frame Time Tax (+X.XX ms / frame)
     # Queries in permanent per-frame loops run continuously; queries in throttled hooks run periodically
     $hookTax = ($permHooks * 0.45) + ($throttledHooks * 0.02)
     $worldTax = if ($permHooks -gt 0) { $inHookWorldQueries * 0.08 } elseif ($throttledHooks -gt 0) { $inHookWorldQueries * 0.015 } else { 0.0 }
@@ -857,9 +857,58 @@ function Get-ModStutterMetrics {
     $jniTax = if ($permHooks -gt 0) { $inHookJNICalls * 0.02 } elseif ($throttledHooks -gt 0) { $inHookJNICalls * 0.005 } else { 0.0 }
 
     $queryTax = $worldTax + $invTax + $containerTax + $uiPollTax + $jniTax
-    $taxRaw = $hookTax + $queryTax
-    $taxText = if ($taxRaw -gt 0.01) {
-        "+$([math]::Round($taxRaw, 2)) ms/frame"
+    $activeTaxRaw = [math]::Round($hookTax + $queryTax, 2)
+
+    # Classify Hook Nature: Continuous Polling vs Dormant (Early-Exit)
+    $isContinuousPolling = $false
+    $isDormantEarlyExit = $false
+
+    if ($permHooks -gt 0) {
+        if ($modId -match "ALife|SuperbSurvivors|SubparSurvivors|NPC|Bandits|Humanoid" -or $modName -match "A-Life|Superb Survivors|NPCs|Bandits") {
+            $isContinuousPolling = $true # Autonomous NPC AI sensory & navigation loop
+        } elseif ($modId -match "PushDoors|Push Door|CyesPushDoors" -or $modName -match "Push Doors") {
+            $isContinuousPolling = $true # Spatial door scan executes every 2 ticks even when away from doors
+        } elseif ($modId -match "TakeABath|BathAndShower|Shower|Hygiene" -or $modName -match "Take A Bath|Shower") {
+            $isContinuousPolling = $true # Player hygiene, fluid, and temperature math runs continuously
+        } elseif ($inHookZombieQueries -ge 3 -or $modId -match "TrueCrawling|ZombieDismemberment|ZombieAnimation|ZombieCrawl|ZombieCollision") {
+            $isContinuousPolling = $true # Continuous zombie proximity checks
+        } elseif ($inHookTileQueries -ge 5 -and -not ($modId -match "PushVehicle|RealisticDash|Lockpick|Construction|TidyUp|GearRattling")) {
+            $isContinuousPolling = $true # Unconstrained tile scanner
+        } else {
+            # Event-gated, interaction-gated, UI-gated, or status-checked early-returns:
+            # Push Vehicle (exits if #pendingPushes == 0), Realistic Dashboard (exits if not in vehicle),
+            # Traits As Skills (throttled timer), Lethal Stealth (exits unless sneaking), Viewpoint QOL, etc.
+            $isDormantEarlyExit = $true
+        }
+    }
+
+    # Idle Baseline Tax:
+    # Fixed Java-to-Lua JNI event invocation cost (~0.10 ms per registered hook)
+    # Plus continuous background payload for unconstrained pollers
+    $idleHookDispatch = ($permHooks * 0.10) + ($throttledHooks * 0.005)
+    $idlePayloadTax = 0.0
+    if ($isContinuousPolling) {
+        $idlePayloadTax = ($inHookWorldQueries * 0.04) + ($inHookTileQueries * 0.03) + ($inHookZombieQueries * 0.03) + ($inHookHeavyContainers * 0.02)
+        if ($idlePayloadTax -lt 0.05 -and $permHooks -gt 0) { $idlePayloadTax = 0.05 * $permHooks }
+    }
+    $idleTaxRaw = [math]::Round($idleHookDispatch + $idlePayloadTax, 2)
+
+    $loopNature = if ($isContinuousPolling) {
+        "Continuous Polling"
+    } elseif ($isDormantEarlyExit) {
+        "Dormant (Early-Exit)"
+    } elseif ($throttledHooks -gt 0) {
+        "Periodic Timer"
+    } else {
+        "Event-Driven"
+    }
+
+    $taxText = if ($activeTaxRaw -gt 0.01) {
+        if ($idleTaxRaw -gt 0.01 -and $idleTaxRaw -lt $activeTaxRaw) {
+            "+$([math]::Round($activeTaxRaw, 2)) ms peak (+$( [math]::Round($idleTaxRaw, 2) ) ms idle)"
+        } else {
+            "+$([math]::Round($activeTaxRaw, 2)) ms/frame"
+        }
     } else {
         "+0.00 ms/frame"
     }
@@ -872,6 +921,7 @@ function Get-ModStutterMetrics {
     if ($containerTax -ge 0.01) { $breakdownParts += "Containers: +$([math]::Round($containerTax, 2)) ms" }
     if ($uiPollTax -ge 0.01) { $breakdownParts += "UI Polling: +$([math]::Round($uiPollTax, 2)) ms" }
     if ($jniTax -ge 0.01) { $breakdownParts += "JNI/Java: +$([math]::Round($jniTax, 2)) ms" }
+    if ($idleTaxRaw -ge 0.01) { $breakdownParts += "Idle Baseline: +$([math]::Round($idleTaxRaw, 2)) ms" }
     $taxBreakdown = if ($breakdownParts.Count -gt 0) { $breakdownParts -join ", " } else { "Minimal static load" }
 
     # 3. Stutter Trigger Scenario
@@ -939,10 +989,12 @@ function Get-ModStutterMetrics {
         $trigger = "Situational: Character Creation & Join (One-Time Setup)"
     } elseif ($modId -match "Equipment|Inventory|Hotbar|Crafting|Menu|Map|Health|DragAndDrop" -or $modName -match "Equipment|Inventory|Hotbar|Crafting|Menu|Map|Health") {
         $trigger = "Situational: While Menu / UI Is Open"
+    } elseif ($modId -match "LethalStealth|Stealth" -or $modName -match "Lethal Stealth") {
+        $trigger = "Situational: While Sneaking / In Stealth Stance"
     } elseif ($modId -match "VanillaVehiclesAnimated|Vehicle|jeep|chevy|ford|dodge|nissan|amgeneral|toyota|ferret|oshkosh|corvette|camaro|mustang|volvo|beetle|KI5") {
         $trigger = "Active: While Driving / Vehicle Streaming"
     } elseif ($permHooks -ge 1) {
-        $trigger = "Continuous (Every Single Frame)"
+        $trigger = if ($isContinuousPolling) { "Active: Continuous Engine Hook (Every Single Frame)" } else { "Dormant: Hook Registered (Early Return Unless Active)" }
     } elseif ($throttledHooks -ge 1) {
         $trigger = "Periodic Timer (~Every 5-10s)"
     }
@@ -953,6 +1005,11 @@ function Get-ModStutterMetrics {
         TaxBreakdown = $taxBreakdown
         StutterTrigger = $trigger
         SpikeSeverity = $spikeSeverity
+        ActiveTaxRaw = $activeTaxRaw
+        IdleTaxRaw = $idleTaxRaw
+        IsContinuousPolling = $isContinuousPolling
+        IsDormantEarlyExit = $isDormantEarlyExit
+        LoopNature = $loopNature
     }
 }
 
@@ -963,7 +1020,7 @@ function Test-IsSpikeWorthy($mod) {
     if ($mod.StutterTrigger -eq 'None (Passive / Static UI)') { return $false }
 
     $hasTax = $false
-    if ($mod.FrameTax -match '\+([\d\.]+)\s*ms/frame') {
+    if ($mod.FrameTax -match '\+([\d\.]+)\s*ms') {
         if ([double]$matches[1] -gt 0.02) { $hasTax = $true }
     }
 
@@ -986,7 +1043,7 @@ function Test-IsSpikeWorthy($mod) {
 # ==============================================================================
 function Invoke-PZScanEngine([string]$CustomServerIni = "", [switch]$LocalWorkshopOnly, [string]$CustomWorkshopPath = "") {
     Write-Host "`n=================================================================" -ForegroundColor Cyan
-    Write-Host "   PROJECT ZOMBOID MOD PERFORMANCE & OPTIMIZATION SUITE v2.12.0 " -ForegroundColor Yellow
+    Write-Host "   PROJECT ZOMBOID MOD PERFORMANCE & OPTIMIZATION SUITE v2.12.1 " -ForegroundColor Yellow
     Write-Host "         Created by @KodeMannn with the help of Gemini          " -ForegroundColor DarkCyan
     Write-Host "=================================================================`n" -ForegroundColor Cyan
 
@@ -1424,6 +1481,11 @@ function Invoke-PZScanEngine([string]$CustomServerIni = "", [switch]$LocalWorksh
             TaxBreakdown = $stutterMetrics.TaxBreakdown
             StutterTrigger = $stutterMetrics.StutterTrigger
             SpikeSeverity = $stutterMetrics.SpikeSeverity
+            ActiveTaxRaw = $stutterMetrics.ActiveTaxRaw
+            IdleTaxRaw = $stutterMetrics.IdleTaxRaw
+            IsContinuousPolling = $stutterMetrics.IsContinuousPolling
+            IsDormantEarlyExit = $stutterMetrics.IsDormantEarlyExit
+            LoopNature = $stutterMetrics.LoopNature
             Verdict = $stutterVerdict
             Reasons = ($riskReasons -join "; ")
             HookBreakdown = ($luaSemantics.HookBreakdown -join ", ")
@@ -1758,10 +1820,26 @@ function Invoke-PZScanEngine([string]$CustomServerIni = "", [switch]$LocalWorksh
     if (-not $totalModModels) { $totalModModels = 0 }
     $totalModTexMB = [math]::Round(($modReports | Measure-Object -Property TextureMB -Sum).Sum, 2)
     $totalModSizeMB = [math]::Round(($modReports | Measure-Object -Property SizeMB -Sum).Sum, 2)
-    $totalFrameTaxRaw = [math]::Round(($totalPermHooks * 0.45) + ($totalInHookQueries * 0.08) + ($totalThrottledHooks * 0.02), 2)
+    $totalActiveTaxRaw = [math]::Round(($modReports | Measure-Object -Property ActiveTaxRaw -Sum).Sum, 2)
+    $totalIdleTaxRaw = [math]::Round(($modReports | Measure-Object -Property IdleTaxRaw -Sum).Sum, 2)
+    if ($totalActiveTaxRaw -eq 0 -and $totalPermHooks -gt 0) {
+        $totalActiveTaxRaw = [math]::Round(($totalPermHooks * 0.45) + ($totalInHookQueries * 0.08) + ($totalThrottledHooks * 0.02), 2)
+        $totalIdleTaxRaw = [math]::Round(($totalPermHooks * 0.10) + ($totalThrottledHooks * 0.005), 2)
+    }
 
-    # Attribution of permanent loop owners across active mods
+    # Attribution of permanent loop owners across active mods (Categorized by continuous vs dormant)
     $permHookMods = @($modReports | Where-Object { $_.PermanentHooks -gt 0 } | Sort-Object -Property PermanentHooks -Descending)
+    $continuousHookMods = @($permHookMods | Where-Object { $_.IsContinuousPolling })
+    $dormantHookMods = @($permHookMods | Where-Object { $_.IsDormantEarlyExit -or (-not $_.IsContinuousPolling) })
+
+    $continuousOwnersText = if ($continuousHookMods.Count -gt 0) {
+        ($continuousHookMods | ForEach-Object { "$($_.ModName) ($($_.PermanentHooks))" }) -join ", "
+    } else { "" }
+
+    $dormantOwnersText = if ($dormantHookMods.Count -gt 0) {
+        ($dormantHookMods | ForEach-Object { "$($_.ModName) ($($_.PermanentHooks))" }) -join ", "
+    } else { "" }
+
     $permOwnersText = if ($permHookMods.Count -gt 0) {
         " [" + (($permHookMods | ForEach-Object { "$($_.ModName) ($($_.PermanentHooks))" }) -join ", ") + "]"
     } else { "" }
@@ -1852,25 +1930,33 @@ function Invoke-PZScanEngine([string]$CustomServerIni = "", [switch]$LocalWorksh
     Write-Host "`n-----------------------------------------------------------------" -ForegroundColor Gray
     Write-Host "   GLOBAL MODPACK RUNTIME BUDGET & LOOP DENSITY" -ForegroundColor Cyan
     Write-Host "-----------------------------------------------------------------" -ForegroundColor Gray
-    Write-Host " Cumulative Mod Frame Tax : +$totalFrameTaxRaw ms/frame (Continuous CPU tick overhead)" -ForegroundColor $(if ($totalFrameTaxRaw -ge 15.0) { "Red" } elseif ($totalFrameTaxRaw -ge 5.0) { "Yellow" } else { "Green" })
-    Write-Host " Active Per-Frame Loops   : $totalPermHooks permanent hooks firing every single frame$permOwnersText" -ForegroundColor $(if ($totalPermHooks -ge 30) { "Red" } elseif ($totalPermHooks -ge 15) { "Yellow" } else { "Green" })
+    Write-Host " Cumulative Mod Frame Tax : +$totalIdleTaxRaw ms/frame (Idle Baseline) | Up to +$totalActiveTaxRaw ms/frame (Active Burst)" -ForegroundColor $(if ($totalActiveTaxRaw -ge 15.0) { "Red" } elseif ($totalActiveTaxRaw -ge 5.0) { "Yellow" } else { "Green" })
+    Write-Host "   -> Baseline Idle Load  : Fixed Java-to-Lua event dispatch & continuous background tile/status scans" -ForegroundColor Gray
+    Write-Host "   -> Active Peak Load    : Worst-case spike when actively interacting with vehicles, doors, or combat" -ForegroundColor Gray
+    Write-Host " Active Per-Frame Loops   : $totalPermHooks permanent hooks registered in Java engine" -ForegroundColor $(if ($totalPermHooks -ge 30) { "Red" } elseif ($totalPermHooks -ge 15) { "Yellow" } else { "Green" })
+    if ($continuousHookMods.Count -gt 0) {
+        Write-Host "   -> Continuous Polling  : $continuousOwnersText" -ForegroundColor Yellow
+    }
+    if ($dormantHookMods.Count -gt 0) {
+        Write-Host "   -> Dormant (Early-Exit): $dormantOwnersText" -ForegroundColor Cyan
+    }
     Write-Host " Total Custom 3D Models   : $totalModModels meshes ($totalModTexMB MB textures across mods)" -ForegroundColor $(if ($totalModModels -ge 3000) { "Red" } elseif ($totalModModels -ge 1000) { "Yellow" } else { "Green" })
     if ($topCpuMods.Count -gt 0) {
         $cpuCulprits = ($topCpuMods | ForEach-Object { "$($_.ModName) ($($_.FrameTax))" }) -join ", "
-        Write-Host "   -> Top CPU Tick Tax: $cpuCulprits" -ForegroundColor DarkCyan
+        Write-Host "   -> Top CPU Tick Tax    : $cpuCulprits" -ForegroundColor DarkCyan
     }
 
     if ($totalPermHooks -ge 15) {
         Write-Host "`n [ALERT] High Loop Density: Cumulative 'death by 1,000 cuts' detected!" -ForegroundColor Red
         Write-Host "         Even if individual mods score lightweight (green), running $totalPermHooks simultaneous" -ForegroundColor Yellow
-        Write-Host "         per-frame Lua hooks eats CPU headroom and causes stuttering during movement." -ForegroundColor Gray
+        Write-Host "         per-frame Lua hooks creates a +$totalIdleTaxRaw ms idle dispatch tax that eats CPU headroom." -ForegroundColor Gray
     }
 
     if ($vehicleCount -ge 15) {
         $loopCountText = if ($vehiclePermLoops -gt 0) { "$vehiclePermLoops permanent loops" } elseif ($vehicleThrotLoops -gt 0) { "$vehicleThrotLoops state-gated hooks" } else { "0 active hooks" }
         Write-Host "`n [MASS VEHICLE FLEET WARNING] $vehicleCount vehicle mods active ($loopCountText)!" -ForegroundColor $(if ($vehiclePermLoops -gt 0) { "Red" } else { "Yellow" })
         Write-Host "         Vehicle mods register per-frame speed/gauge hooks (e.g. DorothyAnemometer)." -ForegroundColor Yellow
-        Write-Host "         Combined, your vehicle fleet contributes +$vehicleTax ms/frame overhead & $vehicleModels meshes." -ForegroundColor Gray
+        Write-Host "         Combined, your vehicle fleet contributes +$vehicleTax ms/frame active overhead & $vehicleModels meshes." -ForegroundColor Gray
         Write-Host "         Recommendation: Trim vehicle mods you aren't currently driving." -ForegroundColor Cyan
     }
 
@@ -1977,7 +2063,7 @@ function Invoke-PZScanEngine([string]$CustomServerIni = "", [switch]$LocalWorksh
     $md = @()
     $md += "# Project Zomboid Mod Performance & Optimization Diagnostic Report"
     $hostName = if ($env:COMPUTERNAME) { $env:COMPUTERNAME } elseif ($env:HOSTNAME) { $env:HOSTNAME } else { [System.Net.Dns]::GetHostName() }
-    $md += "*Generated: $(Get-Date -Format 'yyyy-MM-dd HH:mm:ss') on $hostName by PZ-Mod-Performance-Suite v2.12.0 (Coded with the help of Google Gemini)*"
+    $md += "*Generated: $(Get-Date -Format 'yyyy-MM-dd HH:mm:ss') on $hostName by PZ-Mod-Performance-Suite v2.12.1 (Coded with the help of Google Gemini)*"
     $md += ""
     $md += "## Executive Summary"
     $md += "- **Game Version:** $pzVersion"
@@ -1986,7 +2072,14 @@ function Invoke-PZScanEngine([string]$CustomServerIni = "", [switch]$LocalWorksh
     if ($uninstalledMods.Count -gt 0) {
         $md += "- **Uninstalled Phantom Mods in Save:** $($uninstalledMods.Count) (omitted from performance audit: $($uninstalledMods -join ', '))"
     }
-    $md += "- **Cumulative Mod Frame Tax:** +$totalFrameTaxRaw ms/frame ($totalPermHooks permanent per-frame loops$permOwnersText)"
+    $md += "- **Cumulative Mod Frame Tax:** +$totalIdleTaxRaw ms/frame (Idle Baseline) | Up to +$totalActiveTaxRaw ms/frame (Active Burst)"
+    $md += "  - **Permanent Per-Frame Loops ($totalPermHooks total):**"
+    if ($continuousHookMods.Count -gt 0) {
+        $md += "    - **Continuous Polling ($($continuousHookMods.Count) mods):** $continuousOwnersText (Active spatial tile scans, AI, or status loops)"
+    }
+    if ($dormantHookMods.Count -gt 0) {
+        $md += "    - **Dormant Early-Exit ($($dormantHookMods.Count) mods):** $dormantOwnersText (Hooks registered in engine, but exit in < 0.002 ms when idle)"
+    }
     $md += "- **Configured Frame Cap:** $optionsFps (Active: $frameCap)"
     if ($hasHeadroomTelemetry) {
         $md += "- **Hardware Frame Budget:** GPU: $headroomGpuMs ms | Render CPU: $headroomRenderCpuMs ms | Main Thread: $headroomMainThreadMs ms (~$headroomMainThreadFps FPS headroom)"
@@ -2020,8 +2113,9 @@ function Invoke-PZScanEngine([string]$CustomServerIni = "", [switch]$LocalWorksh
     $md += ""
     $md += "| Global Metric | Audit Value | Safety Threshold | Diagnostic Status |"
     $md += "|:---|:---:|:---:|:---|"
-    $md += "| **Cumulative Frame Tax** | +$totalFrameTaxRaw ms/frame | < 5.00 ms/frame | $(if ($totalFrameTaxRaw -ge 15.0) { '**CRITICAL (Severe CPU drag)**' } elseif ($totalFrameTaxRaw -ge 5.0) { '**HIGH (Heavy load)**' } else { 'Optimal' }) |"
-    $md += "| **Permanent Per-Frame Loops** | $totalPermHooks hooks$permOwnersText | < 15 hooks | $(if ($totalPermHooks -ge 30) { '**CRITICAL (Death by 1,000 cuts)**' } elseif ($totalPermHooks -ge 15) { '**HIGH (High loop density)**' } else { 'Optimal' }) |"
+    $md += "| **Idle Baseline Frame Tax** | +$totalIdleTaxRaw ms/frame | < 2.50 ms/frame | $(if ($totalIdleTaxRaw -ge 5.0) { '**HIGH (Heavy idle load)**' } else { 'Optimal' }) |"
+    $md += "| **Active Burst Frame Tax** | Up to +$totalActiveTaxRaw ms/frame | < 8.00 ms/frame | $(if ($totalActiveTaxRaw -ge 15.0) { '**CRITICAL (Severe peak drag)**' } elseif ($totalActiveTaxRaw -ge 8.0) { '**HIGH (Heavy peak load)**' } else { 'Optimal' }) |"
+    $md += "| **Permanent Per-Frame Loops** | $totalPermHooks hooks ($($continuousHookMods.Count) Continuous, $($dormantHookMods.Count) Dormant) | < 15 hooks | $(if ($totalPermHooks -ge 30) { '**CRITICAL (Death by 1,000 cuts)**' } elseif ($totalPermHooks -ge 15) { '**HIGH (High loop density)**' } else { 'Optimal' }) |"
     $md += "| **Total Custom 3D Meshes** | $totalModModels meshes | < 1,000 meshes | $(if ($totalModModels -ge 3000) { '**CRITICAL (Chunk meshing stalls)**' } elseif ($totalModModels -ge 1000) { '**HIGH (Heavy meshing)**' } else { 'Optimal' }) |"
     $md += "| **Total Texture Footprint** | $totalModTexMB MB | < 500 MB | $(if ($totalModTexMB -ge 1500) { '**CRITICAL (VRAM exhaustion)**' } elseif ($totalModTexMB -ge 500) { '**HIGH (VRAM pressure)**' } else { 'Optimal' }) |"
     $md += "| **GPU Texture Evictions (PCIe Swaps)** | $maxEvictions ($maxEvictedMb MiB) | 0 evictions | $(if ($maxEvictions -gt 0) { '**ACTIVE THRASHING (Render freezes)**' } else { 'Optimal' }) |"
@@ -2040,7 +2134,7 @@ function Invoke-PZScanEngine([string]$CustomServerIni = "", [switch]$LocalWorksh
             $taxDetail = if ($_.TaxBreakdown -and $_.TaxBreakdown -ne "Minimal static load") { "$($_.FrameTax) [Breakdown: $($_.TaxBreakdown)]" } else { "$($_.FrameTax)" }
             "**$($_.ModName)** ($taxDetail)" 
         }) -join "; "
-        $md += "- **Top Continuous CPU Tick Overhead:** $cpuCulpritsMd"
+        $md += "- **Top Active CPU Tick Overhead:** $cpuCulpritsMd"
     }
     $md += ""
     if ($vehicleCount -ge 15) {
@@ -2064,7 +2158,8 @@ function Invoke-PZScanEngine([string]$CustomServerIni = "", [switch]$LocalWorksh
             $md += "- **Impact Classification:** **$($c.Tier)** (Score: $($c.RiskScore)/100)"
             $md += "- **Potential Frame Spike:** **$($c.PotentialSpike)**"
             $taxBreakdownDetail = if ($c.TaxBreakdown -and $c.TaxBreakdown -ne "Minimal static load") { " (Tax Breakdown: $($c.TaxBreakdown))" } else { "" }
-            $md += "- **Continuous Frame Tax:** **$($c.FrameTax)**$taxBreakdownDetail"
+            $loopNatureDetail = if ($c.LoopNature) { " [Nature: $($c.LoopNature)]" } else { "" }
+            $md += "- **Frame Tax:** **$($c.FrameTax)**$loopNatureDetail$taxBreakdownDetail"
             $md += "- **Stutter Trigger Scenario:** $($c.StutterTrigger)"
             $md += "- **Stutter Verdict:** **$($c.Verdict)**"
             $md += "- **Hook Breakdown:** $($c.PermanentHooks) Permanent Loops, $($c.TransientHooks) Transient (self-terminating), $($c.ThrottledHooks) Throttled (timer-gated)"
@@ -2130,7 +2225,7 @@ function Invoke-PZScanEngine([string]$CustomServerIni = "", [switch]$LocalWorksh
     $uninstalledTag = if ($uninstalledMods.Count -gt 0) { " (+$($uninstalledMods.Count) uninstalled)" } else { "" }
     $worstHitchTag = if ($slowFrames.Count -gt 0) { "$wTotal ms" } else { "0ms" }
     $evictTag = if ($maxEvictions -gt 0) { " | Evictions: ${maxEvictions}x" } else { "" }
-    $md += "Mods: $($sortedMods.Count)$uninstalledTag | Loops: $totalPermHooks (+${totalFrameTaxRaw}ms/frame)$evictTag | Conflicts: $($collisions.Count) ($($safeCollisions.Count) Safe, $($riskyCollisions.Count) Risky) | VRAM: $vramReport | Worst Hitch: $worstHitchTag"
+    $md += "Mods: $($sortedMods.Count)$uninstalledTag | Loops: $totalPermHooks (+${totalIdleTaxRaw}ms idle / +${totalActiveTaxRaw}ms peak)$evictTag | Conflicts: $($collisions.Count) ($($safeCollisions.Count) Safe, $($riskyCollisions.Count) Risky) | VRAM: $vramReport | Worst Hitch: $worstHitchTag"
     $top3 = ($sortedMods | Select-Object -First 3 | ForEach-Object { "$($_.ModName) ($($_.Tier))" }) -join ", "
     $md += "Top Lag Impact Mods: $top3"
     $md += '```'
@@ -2147,7 +2242,7 @@ function Show-PZMainMenu {
     while ($true) {
         Clear-Host
         Write-Host "=================================================================" -ForegroundColor Cyan
-        Write-Host "   PROJECT ZOMBOID MOD PERFORMANCE & OPTIMIZATION SUITE v2.12.0 " -ForegroundColor Yellow
+        Write-Host "   PROJECT ZOMBOID MOD PERFORMANCE & OPTIMIZATION SUITE v2.12.1 " -ForegroundColor Yellow
         Write-Host "         Created by @KodeMannn with the help of Gemini          " -ForegroundColor DarkCyan
         Write-Host "=================================================================" -ForegroundColor Cyan
         Write-Host "  [1] Run Full Performance Diagnostic Scan (Active Save)" -ForegroundColor White
