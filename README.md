@@ -24,6 +24,18 @@ Whether you're running a heavily modded singleplayer save or hosting a dedicated
 3. **Choose Option**: Use the interactive terminal menu to run a full diagnostic scan, apply 1-click JVM GC optimization, set safe frame caps, clean ghost mods, or revert changes.
 4. **Play Smooth**: Review the color-coded report before surviving Kentucky with zero micro-stutters.
 
+### 🐧 Linux & 🍎 macOS (including Steam Deck / SteamOS)
+1. **Download**: Grab [`Scan-PZModPerformance.sh`](https://github.com/KodeMannn/PZ-Mod-Performance-Suite/releases/latest) and `Scan-PZModPerformance.ps1` (or download the release `.zip` / `.tar.gz`).
+2. **Make Executable & Run**:
+   ```bash
+   chmod +x Scan-PZModPerformance.sh
+   ./Scan-PZModPerformance.sh
+   ```
+3. **Steam Deck Ready (Zero-Root / Zero-Sudo)**:
+   - If PowerShell Core (`pwsh`) is not yet installed on your system, `Scan-PZModPerformance.sh` automatically offers a **1-click portable download** directly into user-space (`~/.local/share/powershell`).
+   - Requires **no root password**, works on Steam Deck's read-only SteamOS filesystem, and runs out-of-the-box!
+   - Supports native package managers as well: `brew install --cask powershell` (macOS), `sudo apt install powershell` (Ubuntu/Debian), or `yay -S powershell-bin` (Arch).
+
 ### 💻 PowerShell / CLI Power Users
 Run interactive or automated scans with command-line flags:
 ```powershell

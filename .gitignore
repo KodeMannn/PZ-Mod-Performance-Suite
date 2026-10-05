@@ -1,6 +1,7 @@
 # Generated performance reports and archives
 ModPerformanceReport.md
 *.zip
+*.tar.gz
 
 # Log and temporary files
 *.log

@@ -1,6 +1,6 @@
 <# :
 @echo off
-title Project Zomboid Mod Performance ^& Optimization Suite v2.9.0
+title Project Zomboid Mod Performance ^& Optimization Suite v2.10.0
 color 0F
 powershell -NoProfile -ExecutionPolicy Bypass -Command "& ([scriptblock]::Create([System.IO.File]::ReadAllText('%~f0'))) %*"
 echo.
@@ -9,21 +9,21 @@ exit /b
 #>
 <#
 .SYNOPSIS
-    Project Zomboid Mod Performance & Optimization Suite v2.9.0
+    Project Zomboid Mod Performance & Optimization Suite v2.10.0
 .DESCRIPTION
     Comprehensive diagnostic scanner and optimization toolkit for Project Zomboid (Build 42 & 41).
     Features Precision Slow Frame Anatomy Dissection (Main vs Render Thread, GC pauses vs Chunk Cache),
     Causal Bottleneck Attribution (Zero False Mod Accusations), Full Stutter & Lag Spike Impact Roster,
     Hardware & Thread Headroom Telemetry (GPU ms, Render CPU ms, Main Thread ms, Entity Density),
     Top 10 Correlated Spike Culprits with Strict Worthiness Filtering, State-Gated vs Continuous Hook
-    Classification, Global Modpack Runtime Budget, and 1-Click Engine Tuning.
+    Classification, Global Modpack Runtime Budget, Cross-Platform Linux/macOS/Windows Support, and 1-Click Engine Tuning.
 .AUTHOR
     KodeMannn (https://github.com/KodeMannn) - Coded with the assistance of Google Gemini
 #>
 
 [CmdletBinding()]
 param(
-    [string]$ZomboidUserPath = "$env:USERPROFILE\Zomboid",
+    [string]$ZomboidUserPath = "",
     [string]$ReportOutputPath = "",
     [switch]$Auto,
     [switch]$StutterRoster,
@@ -38,6 +38,20 @@ param(
 
 $ErrorActionPreference = "SilentlyContinue"
 
+# Cross-platform OS & User Home Directory Detection
+$isWindows = if ($PSVersionTable.PSVersion.Major -le 5) { $true } else { $IsWindows }
+$isLinux = if ($IsLinux) { $true } else { $false }
+$isMacOS = if ($IsMacOS) { $true } else { $false }
+
+$userHome = if ($env:HOME) { $env:HOME } elseif ($env:USERPROFILE) { $env:USERPROFILE } else { [System.Environment]::GetFolderPath('UserProfile') }
+if (-not $ZomboidUserPath) {
+    if ($userHome) {
+        $ZomboidUserPath = Join-Path $userHome "Zomboid"
+    } else {
+        $ZomboidUserPath = "Zomboid"
+    }
+}
+
 if (-not $ReportOutputPath) {
     if ($PSScriptRoot) {
         $ReportOutputPath = Join-Path $PSScriptRoot "ModPerformanceReport.md"
@@ -47,10 +61,27 @@ if (-not $ReportOutputPath) {
 }
 
 # ==============================================================================
-# Helper Functions: Steam & Library Discovery
+# Helper Functions: Steam & Library Discovery (Cross-Platform)
 # ==============================================================================
 function Get-PZInstallPath {
-    $candidates = @(
+    $candidates = @()
+    if ($userHome) {
+        # Linux & SteamOS / Steam Deck candidates
+        $candidates += @(
+            (Join-Path $userHome ".local/share/Steam/steamapps/common/ProjectZomboid"),
+            (Join-Path $userHome ".steam/steam/steamapps/common/ProjectZomboid"),
+            (Join-Path $userHome ".steam/root/steamapps/common/ProjectZomboid"),
+            (Join-Path $userHome ".var/app/com.valvesoftware.Steam/.local/share/Steam/steamapps/common/ProjectZomboid"),
+            (Join-Path $userHome "Steam/steamapps/common/ProjectZomboid"),
+            (Join-Path $userHome ".steam/debian-installation/steamapps/common/ProjectZomboid"),
+            # macOS candidates
+            (Join-Path $userHome "Library/Application Support/Steam/steamapps/common/ProjectZomboid"),
+            (Join-Path $userHome "Library/Application Support/Steam/steamapps/common/ProjectZomboid/Project Zomboid.app/Contents/Java"),
+            "/Applications/Project Zomboid.app/Contents/Java"
+        )
+    }
+    # Windows candidates
+    $candidates += @(
         "C:\Program Files (x86)\Steam\steamapps\common\ProjectZomboid",
         "C:\Program Files\Steam\steamapps\common\ProjectZomboid",
         "D:\SteamLibrary\steamapps\common\ProjectZomboid",
@@ -59,13 +90,30 @@ function Get-PZInstallPath {
         "H:\SteamLibrary\steamapps\common\ProjectZomboid"
     )
     foreach ($c in $candidates) {
-        if (Test-Path (Join-Path $c "ProjectZomboid64.json")) { return $c }
+        if ((Test-Path (Join-Path $c "ProjectZomboid64.json")) -or 
+            (Test-Path (Join-Path $c "projectzomboid.sh")) -or 
+            (Test-Path (Join-Path $c "Project Zomboid.app"))) { 
+            return $c 
+        }
     }
     return $null
 }
 
 function Get-WorkshopPaths {
-    $potential = @(
+    $potential = @()
+    if ($userHome) {
+        # Linux & Steam Deck candidates
+        $potential += @(
+            (Join-Path $userHome ".local/share/Steam/steamapps/workshop/content/108600"),
+            (Join-Path $userHome ".steam/steam/steamapps/workshop/content/108600"),
+            (Join-Path $userHome ".var/app/com.valvesoftware.Steam/.local/share/Steam/steamapps/workshop/content/108600"),
+            (Join-Path $userHome "Steam/steamapps/workshop/content/108600"),
+            # macOS candidates
+            (Join-Path $userHome "Library/Application Support/Steam/steamapps/workshop/content/108600")
+        )
+    }
+    # Windows candidates
+    $potential += @(
         "C:\Program Files (x86)\Steam\steamapps\workshop\content\108600",
         "C:\Program Files\Steam\steamapps\workshop\content\108600",
         "D:\SteamLibrary\steamapps\workshop\content\108600",
@@ -73,14 +121,31 @@ function Get-WorkshopPaths {
         "E:\SteamLibrary\steamapps\workshop\content\108600",
         "H:\SteamLibrary\steamapps\workshop\content\108600"
     )
-    $vdfPath = "C:\Program Files (x86)\Steam\steamapps\libraryfolders.vdf"
-    if (Test-Path $vdfPath) {
-        $vdfContent = Get-Content $vdfPath -ErrorAction SilentlyContinue
-        foreach ($line in $vdfContent) {
-            if ($line -match '"path"\s+"([^"]+)"') {
-                $libPath = $matches[1] -replace '\\\\', '\'
-                $ws = Join-Path $libPath "steamapps\workshop\content\108600"
-                if ($potential -notcontains $ws) { $potential += $ws }
+
+    # Search for libraryfolders.vdf across all platforms
+    $vdfCandidates = @()
+    if ($userHome) {
+        $vdfCandidates += @(
+            (Join-Path $userHome ".local/share/Steam/steamapps/libraryfolders.vdf"),
+            (Join-Path $userHome ".steam/steam/steamapps/libraryfolders.vdf"),
+            (Join-Path $userHome ".var/app/com.valvesoftware.Steam/.local/share/Steam/steamapps/libraryfolders.vdf"),
+            (Join-Path $userHome "Library/Application Support/Steam/steamapps/libraryfolders.vdf")
+        )
+    }
+    $vdfCandidates += @(
+        "C:\Program Files (x86)\Steam\steamapps\libraryfolders.vdf",
+        "C:\Program Files\Steam\steamapps\libraryfolders.vdf"
+    )
+
+    foreach ($vdfPath in $vdfCandidates) {
+        if (Test-Path $vdfPath) {
+            $vdfContent = Get-Content $vdfPath -ErrorAction SilentlyContinue
+            foreach ($line in $vdfContent) {
+                if ($line -match '"path"\s+"([^"]+)"') {
+                    $libPath = $matches[1] -replace '\\\\', '/' -replace '\\', '/'
+                    $ws = Join-Path $libPath "steamapps/workshop/content/108600"
+                    if ($potential -notcontains $ws) { $potential += $ws }
+                }
             }
         }
     }
@@ -136,9 +201,23 @@ function Invoke-PZFixGC {
         }
         $json.vmArgs = $newArgs
 
-        # Configure G1GC with 5ms pause target for Windows 10/11
+        # Configure G1GC with 5ms pause target for Windows, Linux, and macOS
         if ($json.windows -and $json.windows.'10.0.17134') {
             $json.windows.'10.0.17134'.vmArgs = @(
+                "-XX:+UseG1GC",
+                "-Dpzopt.gc=g1",
+                "-XX:MaxGCPauseMillis=5"
+            )
+        }
+        if ($json.linux) {
+            $json.linux.vmArgs = @(
+                "-XX:+UseG1GC",
+                "-Dpzopt.gc=g1",
+                "-XX:MaxGCPauseMillis=5"
+            )
+        }
+        if ($json.macos) {
+            $json.macos.vmArgs = @(
                 "-XX:+UseG1GC",
                 "-Dpzopt.gc=g1",
                 "-XX:MaxGCPauseMillis=5"
@@ -153,6 +232,10 @@ function Invoke-PZFixGC {
         Write-Host "           UTF-8 BOM-free encoding verified. ZombieBuddy & native launcher preserved." -ForegroundColor Gray
     } catch {
         Write-Host " [ERROR] Failed to update ProjectZomboid64.json: $($_.Exception.Message)" -ForegroundColor Red
+        if ($isLinux -or $isMacOS) {
+            Write-Host " [TIP] You can also apply G1GC via Steam Launch Options:" -ForegroundColor Cyan
+            Write-Host "       %command% -XX:+UseG1GC -XX:MaxGCPauseMillis=5 -Xmx16g" -ForegroundColor White
+        }
     }
 }
 
@@ -319,6 +402,12 @@ function Revert-PZGC {
                 $json = $raw | ConvertFrom-Json
                 if ($json.windows -and $json.windows.'10.0.17134') {
                     $json.windows.'10.0.17134'.vmArgs = @("-XX:+UseZGC")
+                }
+                if ($json.linux) {
+                    $json.linux.vmArgs = @("-XX:+UseZGC")
+                }
+                if ($json.macos) {
+                    $json.macos.vmArgs = @("-XX:+UseZGC")
                 }
                 $newContent = ($json | ConvertTo-Json -Depth 10)
                 [System.IO.File]::WriteAllText($jsonPath, $newContent, $utf8NoBom)
@@ -803,7 +892,7 @@ function Test-IsSpikeWorthy($mod) {
 # ==============================================================================
 function Invoke-PZScanEngine([string]$CustomServerIni = "", [switch]$LocalWorkshopOnly, [string]$CustomWorkshopPath = "") {
     Write-Host "`n=================================================================" -ForegroundColor Cyan
-    Write-Host "   PROJECT ZOMBOID MOD PERFORMANCE & OPTIMIZATION SUITE v2.9.0  " -ForegroundColor Yellow
+    Write-Host "   PROJECT ZOMBOID MOD PERFORMANCE & OPTIMIZATION SUITE v2.10.0 " -ForegroundColor Yellow
     Write-Host "         Created by @KodeMannn with the help of Gemini          " -ForegroundColor DarkCyan
     Write-Host "=================================================================`n" -ForegroundColor Cyan
 
@@ -1767,7 +1856,8 @@ function Invoke-PZScanEngine([string]$CustomServerIni = "", [switch]$LocalWorksh
     # Generate Markdown Report
     $md = @()
     $md += "# Project Zomboid Mod Performance & Optimization Diagnostic Report"
-    $md += "*Generated: $(Get-Date -Format 'yyyy-MM-dd HH:mm:ss') on $env:COMPUTERNAME by PZ-Mod-Performance-Suite v2.9.0 (Coded with the help of Google Gemini)*"
+    $hostName = if ($env:COMPUTERNAME) { $env:COMPUTERNAME } elseif ($env:HOSTNAME) { $env:HOSTNAME } else { [System.Net.Dns]::GetHostName() }
+    $md += "*Generated: $(Get-Date -Format 'yyyy-MM-dd HH:mm:ss') on $hostName by PZ-Mod-Performance-Suite v2.10.0 (Coded with the help of Google Gemini)*"
     $md += ""
     $md += "## Executive Summary"
     $md += "- **Game Version:** $pzVersion"
@@ -1933,7 +2023,7 @@ function Show-PZMainMenu {
     while ($true) {
         Clear-Host
         Write-Host "=================================================================" -ForegroundColor Cyan
-        Write-Host "   PROJECT ZOMBOID MOD PERFORMANCE & OPTIMIZATION SUITE v2.9.0  " -ForegroundColor Yellow
+        Write-Host "   PROJECT ZOMBOID MOD PERFORMANCE & OPTIMIZATION SUITE v2.10.0 " -ForegroundColor Yellow
         Write-Host "         Created by @KodeMannn with the help of Gemini          " -ForegroundColor DarkCyan
         Write-Host "=================================================================" -ForegroundColor Cyan
         Write-Host "  [1] Run Full Performance Diagnostic Scan (Active Save)" -ForegroundColor White
@@ -2030,7 +2120,17 @@ function Show-PZMainMenu {
             }
             "8" {
                 if (Test-Path $ReportOutputPath) {
-                    Start-Process $ReportOutputPath
+                    if ($isMacOS) {
+                        Start-Process "open" -ArgumentList "`"$ReportOutputPath`""
+                    } elseif ($isLinux) {
+                        if (Get-Command xdg-open -ErrorAction SilentlyContinue) {
+                            Start-Process "xdg-open" -ArgumentList "`"$ReportOutputPath`""
+                        } else {
+                            Write-Host " [INFO] Diagnostic Report saved to: $ReportOutputPath" -ForegroundColor Cyan
+                        }
+                    } else {
+                        Start-Process $ReportOutputPath
+                    }
                 } else {
                     Write-Host " [!] No report found yet. Run a scan first!" -ForegroundColor Yellow
                     Start-Sleep -Seconds 2
