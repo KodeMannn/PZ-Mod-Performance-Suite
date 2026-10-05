@@ -1,6 +1,6 @@
-<# :
+﻿<# :
 @echo off
-title Project Zomboid Mod Performance ^& Optimization Suite v2.12.1
+title Project Zomboid Mod Performance ^& Optimization Suite v2.12.2
 color 0F
 powershell -NoProfile -ExecutionPolicy Bypass -Command "& ([scriptblock]::Create([System.IO.File]::ReadAllText('%~f0'))) %*"
 echo.
@@ -9,7 +9,7 @@ exit /b
 #>
 <#
 .SYNOPSIS
-    Project Zomboid Mod Performance & Optimization Suite v2.12.1
+    Project Zomboid Mod Performance & Optimization Suite v2.12.2
 .DESCRIPTION
     Comprehensive diagnostic scanner and optimization toolkit for Project Zomboid (Build 42 & 41).
     Features Precision Slow Frame Anatomy Dissection (Main vs Render Thread, GC pauses vs Chunk Cache),
@@ -868,16 +868,14 @@ function Get-ModStutterMetrics {
             $isContinuousPolling = $true # Autonomous NPC AI sensory & navigation loop
         } elseif ($modId -match "PushDoors|Push Door|CyesPushDoors" -or $modName -match "Push Doors") {
             $isContinuousPolling = $true # Spatial door scan executes every 2 ticks even when away from doors
-        } elseif ($modId -match "TakeABath|BathAndShower|Shower|Hygiene" -or $modName -match "Take A Bath|Shower") {
-            $isContinuousPolling = $true # Player hygiene, fluid, and temperature math runs continuously
         } elseif ($inHookZombieQueries -ge 3 -or $modId -match "TrueCrawling|ZombieDismemberment|ZombieAnimation|ZombieCrawl|ZombieCollision") {
             $isContinuousPolling = $true # Continuous zombie proximity checks
-        } elseif ($inHookTileQueries -ge 5 -and -not ($modId -match "PushVehicle|RealisticDash|Lockpick|Construction|TidyUp|GearRattling")) {
+        } elseif ($inHookTileQueries -ge 5 -and -not ($modId -match "TakeABath|BathAndShower|Shower|PushVehicle|RealisticDash|Lockpick|Construction|TidyUp|GearRattling")) {
             $isContinuousPolling = $true # Unconstrained tile scanner
         } else {
             # Event-gated, interaction-gated, UI-gated, or status-checked early-returns:
-            # Push Vehicle (exits if #pendingPushes == 0), Realistic Dashboard (exits if not in vehicle),
-            # Traits As Skills (throttled timer), Lethal Stealth (exits unless sneaking), Viewpoint QOL, etc.
+            # Take A Bath (exits unless isTakingBath/inBath), Push Vehicle (exits if #pendingPushes == 0), Realistic Dashboard (exits if not in vehicle),
+            # Traits As Skills (throttled timer), Lethal Stealth (exits unless sneaking/server), Viewpoint QOL, etc.
             $isDormantEarlyExit = $true
         }
     }
@@ -950,9 +948,9 @@ function Get-ModStutterMetrics {
     } elseif ($inHookZombieQueries -ge 3 -or $modId -match "TrueCrawling|ZombieDismemberment|ZombieAnimation|ZombieCrawl|ZombieCollision") {
         $trigger = "Horde Proximity & Combat"
     } elseif ($modId -match "PushDoors|Push Door|CyesPushDoors" -or $modName -match "Push Doors") {
-        $trigger = "Situational: Near Doors / While Forcing Doors Open"
+        $trigger = "Active: Background 25-Tile Door Scanner (~Every 2 Ticks)"
     } elseif ($modId -match "TakeABath|BathAndShower|Shower|Hygiene" -or $modName -match "Take A Bath|Shower") {
-        $trigger = "Situational: Near Plumbing Fixtures & Bathing Actions"
+        $trigger = "Situational: Near Plumbing Fixtures & Bathing Actions (Dormant on Foot)"
     } elseif ($inHookTileQueries -ge 5) {
         $trigger = "Situational: Near Interactive World Objects (Tile Scanning)"
     } elseif ($transHooks -ge 15 -or $modId -match "Journal|Burd") {
@@ -964,9 +962,11 @@ function Get-ModStutterMetrics {
             $trigger = "$($optInPrefix)While Menu / UI Is Open (High-Frequency UI Polling)"
         }
     } elseif ($modId -match "RealisticDash|YourDash" -or $modName -match "Realistic Dashboard|Gauges") {
-        $trigger = "Active: While Inside Vehicle / Driving"
+        $trigger = "Active: While Inside Vehicle / Driving (Dormant on Foot)"
     } elseif ($modId -match "PushVehicle" -or $modName -match "Push Vehicle") {
-        $trigger = "Situational: While Pushing a Vehicle"
+        $trigger = "Situational: While Pushing a Vehicle (Dormant on Foot)"
+    } elseif ($modId -match "LethalStealth|RET_LethalStealth" -or $modName -match "Lethal Stealth") {
+        $trigger = "Situational: While Sneaking / In Stealth Stance (Dormant when Upright)"
     } elseif ($modId -match "DynamicGearRattling|GearRattling" -or $modName -match "Gear Rattling") {
         $trigger = "Situational: While Jogging / Moving on Foot (Gear Audio)"
     } elseif ($modId -match "ALifeThreatAlert|ThreatAlert|ThreatDetector" -or $modName -match "Threat Detector") {
@@ -1043,7 +1043,7 @@ function Test-IsSpikeWorthy($mod) {
 # ==============================================================================
 function Invoke-PZScanEngine([string]$CustomServerIni = "", [switch]$LocalWorkshopOnly, [string]$CustomWorkshopPath = "") {
     Write-Host "`n=================================================================" -ForegroundColor Cyan
-    Write-Host "   PROJECT ZOMBOID MOD PERFORMANCE & OPTIMIZATION SUITE v2.12.1 " -ForegroundColor Yellow
+    Write-Host "   PROJECT ZOMBOID MOD PERFORMANCE & OPTIMIZATION SUITE v2.12.2 " -ForegroundColor Yellow
     Write-Host "         Created by @KodeMannn with the help of Gemini          " -ForegroundColor DarkCyan
     Write-Host "=================================================================`n" -ForegroundColor Cyan
 
@@ -1332,12 +1332,32 @@ function Invoke-PZScanEngine([string]$CustomServerIni = "", [switch]$LocalWorksh
             $riskReasons += "Heavy texture pack ($textureMB MB of textures) causing high VRAM consumption"
         }
 
-        # Dynamic semantic scoring
-        $riskScore += ($permHooks * 12)
+        # Determine continuous polling vs dormant early-exit classification for scoring
+        $isContinuous = $false
+        if ($permHooks -gt 0) {
+            if ($modId -match "ALife|SuperbSurvivors|SubparSurvivors|NPC|Bandits|Humanoid" -or $displayName -match "A-Life|Superb Survivors|NPCs|Bandits") {
+                $isContinuous = $true
+            } elseif ($modId -match "PushDoors|Push Door|CyesPushDoors" -or $displayName -match "Push Doors") {
+                $isContinuous = $true
+            } elseif ($inHookZombieQueries -ge 3 -or $modId -match "TrueCrawling|ZombieDismemberment|ZombieAnimation|ZombieCrawl|ZombieCollision") {
+                $isContinuous = $true
+            } elseif ($inHookTileQueries -ge 5 -and -not ($modId -match "TakeABath|BathAndShower|Shower|PushVehicle|RealisticDash|Lockpick|Construction|TidyUp|GearRattling")) {
+                $isContinuous = $true
+            }
+        }
+
+        # Dynamic semantic scoring (Continuous Polling vs Dormant Early-Exit)
+        if ($isContinuous) {
+            $riskScore += ($permHooks * 12)
+            $riskScore += [math]::Min(25, $inHookWorldQueries * 2)
+        } else {
+            # Dormant early-exit: JNI bridge invocation only on idle frames, queries fire only during situational triggers
+            $riskScore += ($permHooks * 4)
+            $riskScore += [math]::Min(10, [math]::Round($inHookWorldQueries * 0.33))
+        }
         $riskScore += [math]::Round($throttledHooks * 1.5)
         $riskScore += [math]::Round($transHooks * 0.5)
 
-        $riskScore += [math]::Min(25, $inHookWorldQueries * 2)
         $riskScore += [math]::Min(5, [math]::Floor($staticWorldQueries / 20))
         $riskScore += [math]::Min(15, [math]::Floor($inHookInvQueries / 2))
         $riskScore += [math]::Min(3, [math]::Floor($staticInvQueries / 50))
@@ -1357,7 +1377,11 @@ function Invoke-PZScanEngine([string]$CustomServerIni = "", [switch]$LocalWorksh
         # Dynamic diagnostic reasons for operational overhead
         $dynamicReasons = @()
         if ($permHooks -gt 0) {
-            $dynamicReasons += "$permHooks unconstrained permanent loop$(if ($permHooks -ne 1) { 's' } else { '' }) firing every frame"
+            if ($isContinuous) {
+                $dynamicReasons += "$permHooks unconstrained permanent loop$(if ($permHooks -ne 1) { 's' } else { '' }) firing every frame"
+            } else {
+                $dynamicReasons += "$permHooks dormant permanent loop$(if ($permHooks -ne 1) { 's' } else { '' }) (registered in engine, early-returns unless interacting)"
+            }
         }
         if ($throttledHooks -gt 0) {
             $dynamicReasons += "$throttledHooks throttled / timer-gated hook$(if ($throttledHooks -ne 1) { 's' } else { '' }) (periodic execution)"
@@ -1846,7 +1870,9 @@ function Invoke-PZScanEngine([string]$CustomServerIni = "", [switch]$LocalWorksh
 
     # Detect mass vehicle fleet stacking
     $vehicleMods = $modReports | Where-Object {
-        $_.ModId -match 'vehicle|jeep|chevy|ford|dodge|lambo|nissan|amgeneral|toyota|ferret|touran|meteor|banshee|pontiac|corvette|mercedes|camaro|mustang|mini|barracuda|chevelle|falcon|bushmaster|impreza|lancer|saturn|stagea|towncar|cucv|oshkosh|regal|suburban|hilux|bronco|volvo|trooper|taurus|beetle|damnlib|ECTO1|lockMart|KI5'
+        $_.ModId -ne 'PushVehicle' -and (
+            $_.ModId -match 'vehicle|jeep|chevy|ford|dodge|lambo|nissan|amgeneral|toyota|ferret|touran|meteor|banshee|pontiac|corvette|mercedes|camaro|mustang|mini|barracuda|chevelle|falcon|bushmaster|impreza|lancer|saturn|stagea|towncar|cucv|oshkosh|regal|suburban|hilux|bronco|volvo|trooper|taurus|beetle|damnlib|ECTO1|lockMart|KI5'
+        )
     }
     $vehicleCount = if ($vehicleMods) { $vehicleMods.Count } else { 0 }
     $vehiclePermLoops = if ($vehicleMods) { ($vehicleMods | Measure-Object -Property PermanentHooks -Sum).Sum } else { 0 }
@@ -1953,9 +1979,13 @@ function Invoke-PZScanEngine([string]$CustomServerIni = "", [switch]$LocalWorksh
     }
 
     if ($vehicleCount -ge 15) {
-        $loopCountText = if ($vehiclePermLoops -gt 0) { "$vehiclePermLoops permanent loops" } elseif ($vehicleThrotLoops -gt 0) { "$vehicleThrotLoops state-gated hooks" } else { "0 active hooks" }
+        $loopCountText = if ($vehiclePermLoops -gt 0) { "$vehiclePermLoops permanent loops" } elseif ($vehicleThrotLoops -gt 0) { "$vehicleThrotLoops state-gated hooks" } else { "0 active per-frame hooks" }
         Write-Host "`n [MASS VEHICLE FLEET WARNING] $vehicleCount vehicle mods active ($loopCountText)!" -ForegroundColor $(if ($vehiclePermLoops -gt 0) { "Red" } else { "Yellow" })
-        Write-Host "         Vehicle mods register per-frame speed/gauge hooks (e.g. DorothyAnemometer)." -ForegroundColor Yellow
+        if ($vehiclePermLoops -gt 0) {
+            Write-Host "         Vehicle mods register per-frame speed/gauge hooks (e.g. DorothyAnemometer)." -ForegroundColor Yellow
+        } else {
+            Write-Host "         Vehicle mods introduce heavy 3D geometry and texture caching load on chunk traversal." -ForegroundColor Yellow
+        }
         Write-Host "         Combined, your vehicle fleet contributes +$vehicleTax ms/frame active overhead & $vehicleModels meshes." -ForegroundColor Gray
         Write-Host "         Recommendation: Trim vehicle mods you aren't currently driving." -ForegroundColor Cyan
     }
@@ -2063,7 +2093,7 @@ function Invoke-PZScanEngine([string]$CustomServerIni = "", [switch]$LocalWorksh
     $md = @()
     $md += "# Project Zomboid Mod Performance & Optimization Diagnostic Report"
     $hostName = if ($env:COMPUTERNAME) { $env:COMPUTERNAME } elseif ($env:HOSTNAME) { $env:HOSTNAME } else { [System.Net.Dns]::GetHostName() }
-    $md += "*Generated: $(Get-Date -Format 'yyyy-MM-dd HH:mm:ss') on $hostName by PZ-Mod-Performance-Suite v2.12.1 (Coded with the help of Google Gemini)*"
+    $md += "*Generated: $(Get-Date -Format 'yyyy-MM-dd HH:mm:ss') on $hostName by PZ-Mod-Performance-Suite v2.12.2 (Coded with the help of Google Gemini)*"
     $md += ""
     $md += "## Executive Summary"
     $md += "- **Game Version:** $pzVersion"
@@ -2136,11 +2166,11 @@ function Invoke-PZScanEngine([string]$CustomServerIni = "", [switch]$LocalWorksh
         }) -join "; "
         $md += "- **Top Active CPU Tick Overhead:** $cpuCulpritsMd"
     }
-    $md += ""
     if ($vehicleCount -ge 15) {
+        $vehicleLoopText = if ($vehiclePermLoops -gt 0) { "$vehiclePermLoops permanent hooks (e.g. DorothyAnemometer, vehicle dash updates)" } elseif ($vehicleThrotLoops -gt 0) { "$vehicleThrotLoops state-gated hooks" } else { "0 active per-frame hooks" }
         $md += "> [!WARNING]"
         $md += "> **Mass Vehicle Fleet Detected ($vehicleCount Active Vehicle Mods)**"
-        $md += "> - **Fleet Per-Frame Loops:** $vehiclePermLoops permanent hooks (e.g. DorothyAnemometer, vehicle dash updates)"
+        $md += "> - **Fleet Per-Frame Loops:** $vehicleLoopText"
         $md += "> - **Fleet Continuous CPU Tax:** +$vehicleTax ms/frame"
         $md += "> - **Fleet Custom Meshes & Textures:** $vehicleModels 3D models, $vehicleTexMB MB textures"
         $md += "> "
@@ -2242,7 +2272,7 @@ function Show-PZMainMenu {
     while ($true) {
         Clear-Host
         Write-Host "=================================================================" -ForegroundColor Cyan
-        Write-Host "   PROJECT ZOMBOID MOD PERFORMANCE & OPTIMIZATION SUITE v2.12.1 " -ForegroundColor Yellow
+        Write-Host "   PROJECT ZOMBOID MOD PERFORMANCE & OPTIMIZATION SUITE v2.12.2 " -ForegroundColor Yellow
         Write-Host "         Created by @KodeMannn with the help of Gemini          " -ForegroundColor DarkCyan
         Write-Host "=================================================================" -ForegroundColor Cyan
         Write-Host "  [1] Run Full Performance Diagnostic Scan (Active Save)" -ForegroundColor White
