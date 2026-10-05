@@ -1,6 +1,6 @@
 <#
 .SYNOPSIS
-    Project Zomboid Mod Performance & Optimization Suite v2.10.0
+    Project Zomboid Mod Performance & Optimization Suite v2.11.0
 .DESCRIPTION
     Comprehensive diagnostic scanner and optimization toolkit for Project Zomboid (Build 42 & 41).
     Features Precision Slow Frame Anatomy Dissection (Main vs Render Thread, GC pauses vs Chunk Cache),
@@ -671,6 +671,9 @@ function Analyze-ModLuaSemantics([System.IO.FileInfo[]]$luaFiles) {
         }
     }
 
+    $isStationaryGated = ($fullCode -match 'not\s+player:isPlayerMoving|not\s+isPlayerMoving|not\s+player:isMoving|not\s+isMoving|isStationary|not\s+\w+:isPlayerMoving|isPlayerStationary')
+    $isOptInToggle = ($fullCode -match 'isActive\(\)|isEnabled\b|toggleState|isToggled|getCustomOption|HOTKEY_BINDING')
+
     return [PSCustomObject]@{
         PermanentHooks = $permHooks
         TransientHooks = $transHooks
@@ -686,6 +689,8 @@ function Analyze-ModLuaSemantics([System.IO.FileInfo[]]$luaFiles) {
         InHookJNICalls = $inHookJNICalls
         StaticJNICalls = $staticJNICalls
         HookBreakdown = $hookBreakdown
+        IsStationaryGated = $isStationaryGated
+        IsOptInToggle = $isOptInToggle
     }
 }
 
@@ -705,7 +710,9 @@ function Get-ModStutterMetrics {
         [string]$modName = "",
         [int]$inHookHeavyContainers = 0,
         [int]$inHookUIPolls = 0,
-        [int]$inHookJNICalls = 0
+        [int]$inHookJNICalls = 0,
+        [bool]$isStationaryGated = $false,
+        [bool]$isOptInToggle = $false
     )
 
     # 1. Potential Spike Duration (ms)
@@ -728,8 +735,13 @@ function Get-ModStutterMetrics {
         $spikeMs = "~20-60 ms [Micro-Stutter]"
         $spikeSeverity = "MODERATE"
     } elseif ($inHookHeavyContainers -ge 1) {
-        $spikeMs = "~15-40 ms [Container Hitch]"
-        $spikeSeverity = "MODERATE"
+        if ($isStationaryGated) {
+            $spikeMs = "~5-15 ms [Stationary Blip]"
+            $spikeSeverity = "LOW"
+        } else {
+            $spikeMs = "~15-40 ms [Container Hitch]"
+            $spikeSeverity = "MODERATE"
+        }
     } elseif ($inHookWorldQueries -ge 5 -or $modId -match "TrueCrawling|ZombieDismemberment|ZombieAnimation|ZombieCrawl") {
         $spikeMs = "~10-35 ms [Combat Hitch]"
         $spikeSeverity = "MODERATE"
@@ -785,32 +797,48 @@ function Get-ModStutterMetrics {
 
     # 2. Continuous Frame Time Tax (+X.XX ms / frame)
     # Queries in permanent per-frame loops run continuously; queries in throttled hooks run periodically
-    $queryTax = if ($permHooks -gt 0) {
-        ($inHookWorldQueries * 0.08) + ($inHookInvQueries * 0.04) + ($inHookHeavyContainers * 0.15) + ($inHookUIPolls * 0.02) + ($inHookJNICalls * 0.02)
-    } elseif ($throttledHooks -gt 0) {
-        ($inHookWorldQueries * 0.015) + ($inHookInvQueries * 0.01) + ($inHookHeavyContainers * 0.04) + ($inHookUIPolls * 0.005) + ($inHookJNICalls * 0.005)
-    } else {
-        0.0
-    }
-    $taxRaw = ($permHooks * 0.45) + ($throttledHooks * 0.02) + $queryTax
+    $hookTax = ($permHooks * 0.45) + ($throttledHooks * 0.02)
+    $worldTax = if ($permHooks -gt 0) { $inHookWorldQueries * 0.08 } elseif ($throttledHooks -gt 0) { $inHookWorldQueries * 0.015 } else { 0.0 }
+    $invTax = if ($permHooks -gt 0) { $inHookInvQueries * 0.04 } elseif ($throttledHooks -gt 0) { $inHookInvQueries * 0.01 } else { 0.0 }
+    $containerTax = if ($permHooks -gt 0) { $inHookHeavyContainers * 0.15 } elseif ($throttledHooks -gt 0) { $inHookHeavyContainers * 0.04 } else { 0.0 }
+    $uiPollTax = if ($permHooks -gt 0) { $inHookUIPolls * 0.02 } elseif ($throttledHooks -gt 0) { $inHookUIPolls * 0.005 } else { 0.0 }
+    $jniTax = if ($permHooks -gt 0) { $inHookJNICalls * 0.02 } elseif ($throttledHooks -gt 0) { $inHookJNICalls * 0.005 } else { 0.0 }
+
+    $queryTax = $worldTax + $invTax + $containerTax + $uiPollTax + $jniTax
+    $taxRaw = $hookTax + $queryTax
     $taxText = if ($taxRaw -gt 0.01) {
         "+$([math]::Round($taxRaw, 2)) ms/frame"
     } else {
         "+0.00 ms/frame"
     }
 
+    # Deterministic formula breakdown
+    $breakdownParts = @()
+    if ($hookTax -ge 0.01) { $breakdownParts += "Hooks: +$([math]::Round($hookTax, 2)) ms" }
+    if ($worldTax -ge 0.01) { $breakdownParts += "World: +$([math]::Round($worldTax, 2)) ms" }
+    if ($invTax -ge 0.01) { $breakdownParts += "Inventory: +$([math]::Round($invTax, 2)) ms" }
+    if ($containerTax -ge 0.01) { $breakdownParts += "Containers: +$([math]::Round($containerTax, 2)) ms" }
+    if ($uiPollTax -ge 0.01) { $breakdownParts += "UI Polling: +$([math]::Round($uiPollTax, 2)) ms" }
+    if ($jniTax -ge 0.01) { $breakdownParts += "JNI/Java: +$([math]::Round($jniTax, 2)) ms" }
+    $taxBreakdown = if ($breakdownParts.Count -gt 0) { $breakdownParts -join ", " } else { "Minimal static load" }
+
     # 3. Stutter Trigger Scenario
     $trigger = "None (Passive / Static UI)"
+    $optInPrefix = if ($isOptInToggle) { "Opt-In Hotkey Mode: " } else { "Situational: " }
     if ($modId -match "PZVoxelStudioViewpoint" -or $worldMeshCount -ge 1000 -or $textureMB -ge 100) {
         $trigger = "Chunk Border Traversal & High-Speed Driving"
     } elseif ($inHookHeavyContainers -ge 1 -and ($modName -match "Viewpoint QOL|Container|Loot" -or $modId -match "ViewpointQOL|Container")) {
-        $trigger = "Situational: Moving Near Containers (Backpack Rebuild)"
+        if ($isStationaryGated) {
+            $trigger = "$($optInPrefix)When Standing Still / Stationary (Container Rebuild - Zero Movement Hitch)"
+        } else {
+            $trigger = "$($optInPrefix)Moving Near Containers (Backpack Rebuild - Unconstrained Movement Hitch)"
+        }
     } elseif ($inHookWorldQueries -ge 5 -or $modId -match "TrueCrawling|ZombieDismemberment|ZombieAnimation|ZombieCrawl") {
         $trigger = "Horde Proximity & Combat"
     } elseif ($transHooks -ge 15 -or $modId -match "Journal|Burd") {
         $trigger = "Action: Transcribing / Reading XP"
     } elseif ($inHookUIPolls -ge 5 -or ($modName -match "Viewpoint QOL" -and $throttledHooks -gt 0)) {
-        $trigger = "Situational: While in Viewpoint (UI Polling & Containers)"
+        $trigger = "$($optInPrefix)While in Viewpoint (UI Polling & Containers)"
     } elseif ($modId -match "RealisticDash|YourDash" -or $modName -match "Realistic Dashboard|Gauges") {
         $trigger = "Active: While Inside Vehicle / Driving"
     } elseif ($modId -match "PushVehicle" -or $modName -match "Push Vehicle") {
@@ -848,6 +876,7 @@ function Get-ModStutterMetrics {
     return [PSCustomObject]@{
         PotentialSpike = $spikeMs
         FrameTax = $taxText
+        TaxBreakdown = $taxBreakdown
         StutterTrigger = $trigger
         SpikeSeverity = $spikeSeverity
     }
@@ -883,7 +912,7 @@ function Test-IsSpikeWorthy($mod) {
 # ==============================================================================
 function Invoke-PZScanEngine([string]$CustomServerIni = "", [switch]$LocalWorkshopOnly, [string]$CustomWorkshopPath = "") {
     Write-Host "`n=================================================================" -ForegroundColor Cyan
-    Write-Host "   PROJECT ZOMBOID MOD PERFORMANCE & OPTIMIZATION SUITE v2.10.0 " -ForegroundColor Yellow
+    Write-Host "   PROJECT ZOMBOID MOD PERFORMANCE & OPTIMIZATION SUITE v2.11.0 " -ForegroundColor Yellow
     Write-Host "         Created by @KodeMannn with the help of Gemini          " -ForegroundColor DarkCyan
     Write-Host "=================================================================`n" -ForegroundColor Cyan
 
@@ -1272,7 +1301,9 @@ function Invoke-PZScanEngine([string]$CustomServerIni = "", [switch]$LocalWorksh
             -modName $displayName `
             -inHookHeavyContainers $inHookHeavyContainers `
             -inHookUIPolls $inHookUIPolls `
-            -inHookJNICalls $inHookJNICalls
+            -inHookJNICalls $inHookJNICalls `
+            -isStationaryGated $luaSemantics.IsStationaryGated `
+            -isOptInToggle $luaSemantics.IsOptInToggle
 
         $modReports += [PSCustomObject]@{
             ModId = $modId
@@ -1299,6 +1330,7 @@ function Invoke-PZScanEngine([string]$CustomServerIni = "", [switch]$LocalWorksh
             CharacterMeshCount = $characterMeshCount
             PotentialSpike = $stutterMetrics.PotentialSpike
             FrameTax = $stutterMetrics.FrameTax
+            TaxBreakdown = $stutterMetrics.TaxBreakdown
             StutterTrigger = $stutterMetrics.StutterTrigger
             SpikeSeverity = $stutterMetrics.SpikeSeverity
             Verdict = $stutterVerdict
@@ -1637,6 +1669,12 @@ function Invoke-PZScanEngine([string]$CustomServerIni = "", [switch]$LocalWorksh
     $totalModSizeMB = [math]::Round(($modReports | Measure-Object -Property SizeMB -Sum).Sum, 2)
     $totalFrameTaxRaw = [math]::Round(($totalPermHooks * 0.45) + ($totalInHookQueries * 0.08) + ($totalThrottledHooks * 0.02), 2)
 
+    # Attribution of permanent loop owners across active mods
+    $permHookMods = @($modReports | Where-Object { $_.PermanentHooks -gt 0 } | Sort-Object -Property PermanentHooks -Descending)
+    $permOwnersText = if ($permHookMods.Count -gt 0) {
+        " [" + (($permHookMods | ForEach-Object { "$($_.ModName) ($($_.PermanentHooks))" }) -join ", ") + "]"
+    } else { "" }
+
     # Detect mass vehicle fleet stacking
     $vehicleMods = $modReports | Where-Object {
         $_.ModId -match 'vehicle|jeep|chevy|ford|dodge|lambo|nissan|amgeneral|toyota|ferret|touran|meteor|banshee|pontiac|corvette|mercedes|camaro|mustang|mini|barracuda|chevelle|falcon|bushmaster|impreza|lancer|saturn|stagea|towncar|cucv|oshkosh|regal|suburban|hilux|bronco|volvo|trooper|taurus|beetle|damnlib|ECTO1|lockMart|KI5'
@@ -1724,7 +1762,7 @@ function Invoke-PZScanEngine([string]$CustomServerIni = "", [switch]$LocalWorksh
     Write-Host "   GLOBAL MODPACK RUNTIME BUDGET & LOOP DENSITY" -ForegroundColor Cyan
     Write-Host "-----------------------------------------------------------------" -ForegroundColor Gray
     Write-Host " Cumulative Mod Frame Tax : +$totalFrameTaxRaw ms/frame (Continuous CPU tick overhead)" -ForegroundColor $(if ($totalFrameTaxRaw -ge 15.0) { "Red" } elseif ($totalFrameTaxRaw -ge 5.0) { "Yellow" } else { "Green" })
-    Write-Host " Active Per-Frame Loops   : $totalPermHooks permanent hooks firing every single frame" -ForegroundColor $(if ($totalPermHooks -ge 30) { "Red" } elseif ($totalPermHooks -ge 15) { "Yellow" } else { "Green" })
+    Write-Host " Active Per-Frame Loops   : $totalPermHooks permanent hooks firing every single frame$permOwnersText" -ForegroundColor $(if ($totalPermHooks -ge 30) { "Red" } elseif ($totalPermHooks -ge 15) { "Yellow" } else { "Green" })
     Write-Host " Total Custom 3D Models   : $totalModModels meshes ($totalModTexMB MB textures across mods)" -ForegroundColor $(if ($totalModModels -ge 3000) { "Red" } elseif ($totalModModels -ge 1000) { "Yellow" } else { "Green" })
     if ($topCpuMods.Count -gt 0) {
         $cpuCulprits = ($topCpuMods | ForEach-Object { "$($_.ModName) ($($_.FrameTax))" }) -join ", "
@@ -1848,7 +1886,7 @@ function Invoke-PZScanEngine([string]$CustomServerIni = "", [switch]$LocalWorksh
     $md = @()
     $md += "# Project Zomboid Mod Performance & Optimization Diagnostic Report"
     $hostName = if ($env:COMPUTERNAME) { $env:COMPUTERNAME } elseif ($env:HOSTNAME) { $env:HOSTNAME } else { [System.Net.Dns]::GetHostName() }
-    $md += "*Generated: $(Get-Date -Format 'yyyy-MM-dd HH:mm:ss') on $hostName by PZ-Mod-Performance-Suite v2.10.0 (Coded with the help of Google Gemini)*"
+    $md += "*Generated: $(Get-Date -Format 'yyyy-MM-dd HH:mm:ss') on $hostName by PZ-Mod-Performance-Suite v2.11.0 (Coded with the help of Google Gemini)*"
     $md += ""
     $md += "## Executive Summary"
     $md += "- **Game Version:** $pzVersion"
@@ -1857,7 +1895,7 @@ function Invoke-PZScanEngine([string]$CustomServerIni = "", [switch]$LocalWorksh
     if ($uninstalledMods.Count -gt 0) {
         $md += "- **Uninstalled Phantom Mods in Save:** $($uninstalledMods.Count) (omitted from performance audit: $($uninstalledMods -join ', '))"
     }
-    $md += "- **Cumulative Mod Frame Tax:** +$totalFrameTaxRaw ms/frame ($totalPermHooks permanent per-frame loops)"
+    $md += "- **Cumulative Mod Frame Tax:** +$totalFrameTaxRaw ms/frame ($totalPermHooks permanent per-frame loops$permOwnersText)"
     $md += "- **Configured Frame Cap:** $optionsFps (Active: $frameCap)"
     if ($hasHeadroomTelemetry) {
         $md += "- **Hardware Frame Budget:** GPU: $headroomGpuMs ms | Render CPU: $headroomRenderCpuMs ms | Main Thread: $headroomMainThreadMs ms (~$headroomMainThreadFps FPS headroom)"
@@ -1892,7 +1930,7 @@ function Invoke-PZScanEngine([string]$CustomServerIni = "", [switch]$LocalWorksh
     $md += "| Global Metric | Audit Value | Safety Threshold | Diagnostic Status |"
     $md += "|:---|:---:|:---:|:---|"
     $md += "| **Cumulative Frame Tax** | +$totalFrameTaxRaw ms/frame | < 5.00 ms/frame | $(if ($totalFrameTaxRaw -ge 15.0) { '**CRITICAL (Severe CPU drag)**' } elseif ($totalFrameTaxRaw -ge 5.0) { '**HIGH (Heavy load)**' } else { 'Optimal' }) |"
-    $md += "| **Permanent Per-Frame Loops** | $totalPermHooks hooks | < 15 hooks | $(if ($totalPermHooks -ge 30) { '**CRITICAL (Death by 1,000 cuts)**' } elseif ($totalPermHooks -ge 15) { '**HIGH (High loop density)**' } else { 'Optimal' }) |"
+    $md += "| **Permanent Per-Frame Loops** | $totalPermHooks hooks$permOwnersText | < 15 hooks | $(if ($totalPermHooks -ge 30) { '**CRITICAL (Death by 1,000 cuts)**' } elseif ($totalPermHooks -ge 15) { '**HIGH (High loop density)**' } else { 'Optimal' }) |"
     $md += "| **Total Custom 3D Meshes** | $totalModModels meshes | < 1,000 meshes | $(if ($totalModModels -ge 3000) { '**CRITICAL (Chunk meshing stalls)**' } elseif ($totalModModels -ge 1000) { '**HIGH (Heavy meshing)**' } else { 'Optimal' }) |"
     $md += "| **Total Texture Footprint** | $totalModTexMB MB | < 500 MB | $(if ($totalModTexMB -ge 1500) { '**CRITICAL (VRAM exhaustion)**' } elseif ($totalModTexMB -ge 500) { '**HIGH (VRAM pressure)**' } else { 'Optimal' }) |"
     $md += "| **GPU Texture Evictions (PCIe Swaps)** | $maxEvictions ($maxEvictedMb MiB) | 0 evictions | $(if ($maxEvictions -gt 0) { '**ACTIVE THRASHING (Render freezes)**' } else { 'Optimal' }) |"
@@ -1907,7 +1945,10 @@ function Invoke-PZScanEngine([string]$CustomServerIni = "", [switch]$LocalWorksh
         $md += "- **Top Correlated 3D Mesh Injectors:** $meshCulpritsMd"
     }
     if ($topCpuMods.Count -gt 0) {
-        $cpuCulpritsMd = ($topCpuMods | ForEach-Object { "**$($_.ModName)** ($($_.FrameTax))" }) -join ", "
+        $cpuCulpritsMd = ($topCpuMods | ForEach-Object { 
+            $taxDetail = if ($_.TaxBreakdown -and $_.TaxBreakdown -ne "Minimal static load") { "$($_.FrameTax) [Breakdown: $($_.TaxBreakdown)]" } else { "$($_.FrameTax)" }
+            "**$($_.ModName)** ($taxDetail)" 
+        }) -join "; "
         $md += "- **Top Continuous CPU Tick Overhead:** $cpuCulpritsMd"
     }
     $md += ""
@@ -1931,7 +1972,8 @@ function Invoke-PZScanEngine([string]$CustomServerIni = "", [switch]$LocalWorksh
             $md += "### **$($c.ModName)** ($modIdText)"
             $md += "- **Impact Classification:** **$($c.Tier)** (Score: $($c.RiskScore)/100)"
             $md += "- **Potential Frame Spike:** **$($c.PotentialSpike)**"
-            $md += "- **Continuous Frame Tax:** **$($c.FrameTax)**"
+            $taxBreakdownDetail = if ($c.TaxBreakdown -and $c.TaxBreakdown -ne "Minimal static load") { " (Tax Breakdown: $($c.TaxBreakdown))" } else { "" }
+            $md += "- **Continuous Frame Tax:** **$($c.FrameTax)**$taxBreakdownDetail"
             $md += "- **Stutter Trigger Scenario:** $($c.StutterTrigger)"
             $md += "- **Stutter Verdict:** **$($c.Verdict)**"
             $md += "- **Hook Breakdown:** $($c.PermanentHooks) Permanent Loops, $($c.TransientHooks) Transient (self-terminating), $($c.ThrottledHooks) Throttled (timer-gated)"
@@ -2014,7 +2056,7 @@ function Show-PZMainMenu {
     while ($true) {
         Clear-Host
         Write-Host "=================================================================" -ForegroundColor Cyan
-        Write-Host "   PROJECT ZOMBOID MOD PERFORMANCE & OPTIMIZATION SUITE v2.10.0 " -ForegroundColor Yellow
+        Write-Host "   PROJECT ZOMBOID MOD PERFORMANCE & OPTIMIZATION SUITE v2.11.0 " -ForegroundColor Yellow
         Write-Host "         Created by @KodeMannn with the help of Gemini          " -ForegroundColor DarkCyan
         Write-Host "=================================================================" -ForegroundColor Cyan
         Write-Host "  [1] Run Full Performance Diagnostic Scan (Active Save)" -ForegroundColor White
