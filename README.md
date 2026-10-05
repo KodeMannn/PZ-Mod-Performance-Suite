@@ -62,6 +62,9 @@ Run interactive or automated scans with command-line flags:
 
 # Revert all changes and restore original backups:
 .\Scan-PZModPerformance.ps1 -Revert All
+
+# Ingest a specific engine log (e.g. Build 42 DebugLog or dedicated server log):
+.\Scan-PZModPerformance.ps1 -CustomLogPath "$env:USERPROFILE\Zomboid\Logs\2026-10-05_09-02_DebugLog.txt"
 ```
 
 > **Zero Dependencies:** Requires no installation, no extra modules, and no separate `.ps1` file. Runs out-of-the-box on Windows 10 & 11 via native PowerShell-Batch polyglot execution.
@@ -87,6 +90,7 @@ PZ-Mod-Performance-Suite features 8 selectable operations to fit your workflow:
 
 ## 🔍 Key Features
 
+* **📜 Build 42 Session DebugLog Auto-Discovery & Live Telemetry Ingestion (v2.13.0):** Automatically detects and parses Build 42 active session debug logs (`Zomboid\Logs\<timestamp>_DebugLog.txt`) alongside root `console.txt`, archived session logs (`Logs\logs_*\`), and multiplayer/coop logs. Guarantees live hardware frame times (GPU ms, Render CPU ms, Main Thread ms), loaded zombie entity density, VRAM allocations/PCIe evictions, JVM garbage collection pauses, and recorded slow-frame spikes even when the game is actively running with buffered console logs. Features high-performance non-locking `[System.IO.FileShare]::ReadWrite` streaming for instant reading of 20,000+ line logs (< 80 ms), and adds `-CustomLogPath` parameter for manual log targeting by server administrators.
 * **⚡ Idle Baseline vs. Active Burst Tax Telemetry (v2.12.2):** Directly solves player and server admin confusion regarding per-frame loops! Differentiates **Idle Baseline Tax** (the fixed ~0.10 ms Java $\rightarrow$ Lua JNI bridge dispatch cost plus true background scanners) from **Active Burst Tax** (peak worst-case concurrent load during vehicle pushing, driving, or combat). Categorizes all registered per-frame hooks into **Continuous Polling** (e.g. `Cye's Push Doors!` 25-tile spatial scans) vs. **Dormant (Early-Exit)** (e.g. `Take A Bath And Shower`, `Push Vehicle`, `Realistic Dashboard`, `Traits As Skills`, which exit instantly in `< 0.002 ms` when idle on foot). Differentiates semantic risk scoring (12 pts for continuous vs. 4 pts for dormant), correctly scoring dormant mods into Tier 3 / Tier 4 without false critical alarms, and excludes interaction tools like `Push Vehicle` from the drivable vehicle fleet aggregator.
 * **🤖 Autonomous NPC AI Simulation Taxonomy (v2.12.0):** Adds specialized classification for NPC behavioral engines (`Project A-Life [ALIFE NPCS]`, `Superb Survivors`, `Bandits`), tagging background sensory perception and state machine loops as `Active: Autonomous NPC AI & Sensory Scanning` with `[AI Simulation Spike]` attribution.
 * **🚪 Entity vs. World Tile / Object Query Dissection (v2.12.0):** Splits monolithic world query counters into entity/zombie scans (`getZombieList`, `getCharacters`) and map coordinate queries (`getSquare`, `getGridSquare`). Completely eliminates false `Horde Proximity & Combat` labels on non-combat interaction mods like `Take A Bath And Shower` (plumbing fixture checks) and `Cye's Push Doors!` (door tile checks).

@@ -1,6 +1,6 @@
 <#
 .SYNOPSIS
-    Project Zomboid Mod Performance & Optimization Suite v2.12.2
+    Project Zomboid Mod Performance & Optimization Suite v2.13.0
 .DESCRIPTION
     Comprehensive diagnostic scanner and optimization toolkit for Project Zomboid (Build 42 & 41).
     Features Precision Slow Frame Anatomy Dissection (Main vs Render Thread, GC pauses vs Chunk Cache),
@@ -16,6 +16,7 @@
 param(
     [string]$ZomboidUserPath = "",
     [string]$ReportOutputPath = "",
+    [string]$CustomLogPath = "",
     [switch]$Auto,
     [switch]$StutterRoster,
     [string]$ServerConfigPath = "",
@@ -141,6 +142,82 @@ function Get-WorkshopPaths {
         }
     }
     return @($potential | Where-Object { Test-Path $_ })
+}
+
+# ==============================================================================
+# Helper Function: Dynamic Runtime Engine Log Discovery (Build 42 & 41)
+# ==============================================================================
+function Resolve-PZEngineLogFile([string]$userPath, [string]$customLog = "") {
+    # 1. User-supplied custom log path
+    if ($customLog -and (Test-Path $customLog)) {
+        $ci = Get-Item $customLog -ErrorAction SilentlyContinue
+        if ($ci -and $ci.Length -gt 0) {
+            return $ci
+        }
+    }
+
+    # 2. Check active session DebugLogs in Zomboid\Logs\
+    $logsDir = Join-Path $userPath "Logs"
+    $latestDebug = $null
+    if (Test-Path $logsDir) {
+        $debugLogs = @(Get-ChildItem -Path $logsDir -Filter "*DebugLog.txt" -File -ErrorAction SilentlyContinue |
+            Where-Object { $_.Length -gt 0 } |
+            Sort-Object LastWriteTime -Descending)
+        if ($debugLogs.Count -gt 0) {
+            $latestDebug = $debugLogs[0]
+        }
+    }
+
+    # 3. Check root console.txt
+    $consoleLog = Join-Path $userPath "console.txt"
+    $consoleItem = $null
+    if (Test-Path $consoleLog) {
+        $ci = Get-Item $consoleLog -ErrorAction SilentlyContinue
+        if ($ci -and $ci.Length -gt 0) {
+            $consoleItem = $ci
+        }
+    }
+
+    # Compare latest debug log vs console.txt: pick whichever is non-empty and most recently modified
+    if ($latestDebug -and $consoleItem) {
+        if ($consoleItem.LastWriteTime -gt $latestDebug.LastWriteTime) {
+            return $consoleItem
+        } else {
+            return $latestDebug
+        }
+    } elseif ($latestDebug) {
+        return $latestDebug
+    } elseif ($consoleItem) {
+        return $consoleItem
+    }
+
+    # 4. Fallback to archived session logs in Zomboid\Logs\logs_*\*_DebugLog.txt
+    if (Test-Path $logsDir) {
+        $archivedLogs = @(Get-ChildItem -Path $logsDir -Filter "*DebugLog.txt" -Recurse -File -ErrorAction SilentlyContinue |
+            Where-Object { $_.Length -gt 0 } |
+            Sort-Object LastWriteTime -Descending)
+        if ($archivedLogs.Count -gt 0) {
+            return $archivedLogs[0]
+        }
+    }
+
+    # 5. Fallback to coop/server logs
+    foreach ($srvLog in @("coop-console.txt", "server-console.txt")) {
+        $sp = Join-Path $userPath $srvLog
+        if (Test-Path $sp) {
+            $si = Get-Item $sp -ErrorAction SilentlyContinue
+            if ($si -and $si.Length -gt 0) {
+                return $si
+            }
+        }
+    }
+
+    # 6. Fallback if console.txt exists even if 0 bytes
+    if (Test-Path $consoleLog) {
+        return (Get-Item $consoleLog -ErrorAction SilentlyContinue)
+    }
+
+    return $null
 }
 
 # ==============================================================================
@@ -1032,9 +1109,9 @@ function Test-IsSpikeWorthy($mod) {
 # ==============================================================================
 # Core Diagnostic Engine
 # ==============================================================================
-function Invoke-PZScanEngine([string]$CustomServerIni = "", [switch]$LocalWorkshopOnly, [string]$CustomWorkshopPath = "") {
+function Invoke-PZScanEngine([string]$CustomServerIni = "", [switch]$LocalWorkshopOnly, [string]$CustomWorkshopPath = "", [string]$CustomLog = "") {
     Write-Host "`n=================================================================" -ForegroundColor Cyan
-    Write-Host "   PROJECT ZOMBOID MOD PERFORMANCE & OPTIMIZATION SUITE v2.12.2 " -ForegroundColor Yellow
+    Write-Host "   PROJECT ZOMBOID MOD PERFORMANCE & OPTIMIZATION SUITE v2.13.0 " -ForegroundColor Yellow
     Write-Host "         Created by @KodeMannn with the help of Gemini          " -ForegroundColor DarkCyan
     Write-Host "=================================================================`n" -ForegroundColor Cyan
 
@@ -1047,6 +1124,15 @@ function Invoke-PZScanEngine([string]$CustomServerIni = "", [switch]$LocalWorksh
 
     $validWorkshopPaths = Get-WorkshopPaths
     Write-Host " [INFO] Found $($validWorkshopPaths.Count) Steam Workshop Librar$(if($validWorkshopPaths.Count -eq 1){'y'}else{'ies'})" -ForegroundColor Gray
+
+    $targetLogItem = Resolve-PZEngineLogFile -userPath $ZomboidUserPath -customLog $CustomLog
+    $targetLogName = if ($targetLogItem) { $targetLogItem.Name } else { "None" }
+    $targetLogSizeMb = if ($targetLogItem) { [math]::Round($targetLogItem.Length / 1MB, 2) } else { 0 }
+    $logInfoStr = if ($targetLogItem -and $targetLogItem.Length -gt 0) {
+        "$targetLogName ($targetLogSizeMb MB)"
+    } else {
+        "None detected (console.txt / DebugLog empty or absent)"
+    }
 
     $activeMods = @()
     $saveName = "Unknown"
@@ -1134,7 +1220,8 @@ function Invoke-PZScanEngine([string]$CustomServerIni = "", [switch]$LocalWorksh
         }
     }
 
-    Write-Host " [INFO] Total Enabled Mods to Audit: $($activeMods.Count)`n" -ForegroundColor Cyan
+    Write-Host " [INFO] Total Enabled Mods to Audit: $($activeMods.Count)" -ForegroundColor Cyan
+    Write-Host " [INFO] Runtime Engine Log         : $logInfoStr`n" -ForegroundColor $(if ($targetLogItem -and $targetLogItem.Length -gt 0) { "Gray" } else { "DarkGray" })
     if ($activeMods.Count -eq 0) {
         if ($LocalWorkshopOnly) {
             Write-Host " [!] No mods with mod.info found in local workshop folder ($targetWs)." -ForegroundColor Yellow
@@ -1568,8 +1655,8 @@ function Invoke-PZScanEngine([string]$CustomServerIni = "", [switch]$LocalWorksh
     }
 
     # Parse runtime logs safely (even while PZ is actively running)
-    Write-Progress -Activity "Project Zomboid Mod Diagnostic Engine" -Status "Phase 3/4: Parsing Engine Telemetry & Slow Frames (console.txt)..." -PercentComplete 85
-    $consoleLog = Join-Path $ZomboidUserPath "console.txt"
+    Write-Progress -Activity "Project Zomboid Mod Diagnostic Engine" -Status "Phase 3/4: Parsing Engine Telemetry & Slow Frames ($targetLogName)..." -PercentComplete 85
+    $targetLogPath = if ($targetLogItem) { $targetLogItem.FullName } else { $null }
     $slowFrames = @()
     $vramReport = "N/A"
     $heapReport = "N/A"
@@ -1595,18 +1682,24 @@ function Invoke-PZScanEngine([string]$CustomServerIni = "", [switch]$LocalWorksh
     $headroomMainThreadFps = 0
     $headroomZombies = 0
 
-    if (Test-Path $consoleLog) {
-        $logLines = @()
+    if ($targetLogPath -and (Test-Path $targetLogPath)) {
+        $logLines = New-Object System.Collections.Generic.List[string]
         try {
-            $stream = [System.IO.File]::Open($consoleLog, [System.IO.FileMode]::Open, [System.IO.FileAccess]::Read, [System.IO.FileShare]::ReadWrite)
+            $stream = [System.IO.File]::Open($targetLogPath, [System.IO.FileMode]::Open, [System.IO.FileAccess]::Read, [System.IO.FileShare]::ReadWrite)
             $reader = New-Object System.IO.StreamReader($stream, [System.Text.Encoding]::UTF8)
             while (-not $reader.EndOfStream) {
-                $logLines += $reader.ReadLine()
+                $line = $reader.ReadLine()
+                if ($line) { $logLines.Add($line) }
             }
             $reader.Close()
             $stream.Close()
         } catch {
-            $logLines = Get-Content $consoleLog -ErrorAction SilentlyContinue
+            $fallbackLines = Get-Content $targetLogPath -ErrorAction SilentlyContinue
+            if ($fallbackLines) {
+                foreach ($fl in $fallbackLines) {
+                    if ($fl) { $logLines.Add($fl) }
+                }
+            }
         }
 
         foreach ($line in $logLines) {
@@ -1882,6 +1975,7 @@ function Invoke-PZScanEngine([string]$CustomServerIni = "", [switch]$LocalWorksh
     Write-Host "`n-----------------------------------------------------------------" -ForegroundColor Gray
     Write-Host "   RUNTIME ENGINE TELEMETRY SUMMARY" -ForegroundColor Cyan
     Write-Host "-----------------------------------------------------------------" -ForegroundColor Gray
+    Write-Host " Ingested Engine Log  : $logInfoStr" -ForegroundColor $(if ($targetLogItem -and $targetLogItem.Length -gt 0) { "Cyan" } else { "Gray" })
     Write-Host " Configured Frame Cap : $optionsFps (Active: $frameCap)" -ForegroundColor White
     if ($hasHeadroomTelemetry) {
         $headroomColor = if ($headroomMainThreadMs -le 11.0 -and $headroomGpuMs -le 11.0) { "Green" } elseif ($headroomMainThreadMs -le 16.6) { "Yellow" } else { "Red" }
@@ -2084,11 +2178,12 @@ function Invoke-PZScanEngine([string]$CustomServerIni = "", [switch]$LocalWorksh
     $md = @()
     $md += "# Project Zomboid Mod Performance & Optimization Diagnostic Report"
     $hostName = if ($env:COMPUTERNAME) { $env:COMPUTERNAME } elseif ($env:HOSTNAME) { $env:HOSTNAME } else { [System.Net.Dns]::GetHostName() }
-    $md += "*Generated: $(Get-Date -Format 'yyyy-MM-dd HH:mm:ss') on $hostName by PZ-Mod-Performance-Suite v2.12.2 (Coded with the help of Google Gemini)*"
+    $md += "*Generated: $(Get-Date -Format 'yyyy-MM-dd HH:mm:ss') on $hostName by PZ-Mod-Performance-Suite v2.13.0 (Coded with the help of Google Gemini)*"
     $md += ""
     $md += "## Executive Summary"
     $md += "- **Game Version:** $pzVersion"
     $md += "- **Audit Source:** $saveName"
+    $md += "- **Runtime Engine Log:** $(if ($targetLogItem -and $targetLogItem.Length -gt 0) { "``$targetLogName`` ($targetLogSizeMb MB)" } else { "None detected" })"
     $md += "- **Total Active Mods Audited:** $($sortedMods.Count)"
     if ($uninstalledMods.Count -gt 0) {
         $md += "- **Uninstalled Phantom Mods in Save:** $($uninstalledMods.Count) (omitted from performance audit: $($uninstalledMods -join ', '))"
@@ -2263,7 +2358,7 @@ function Show-PZMainMenu {
     while ($true) {
         Clear-Host
         Write-Host "=================================================================" -ForegroundColor Cyan
-        Write-Host "   PROJECT ZOMBOID MOD PERFORMANCE & OPTIMIZATION SUITE v2.12.2 " -ForegroundColor Yellow
+        Write-Host "   PROJECT ZOMBOID MOD PERFORMANCE & OPTIMIZATION SUITE v2.13.0 " -ForegroundColor Yellow
         Write-Host "         Created by @KodeMannn with the help of Gemini          " -ForegroundColor DarkCyan
         Write-Host "=================================================================" -ForegroundColor Cyan
         Write-Host "  [1] Run Full Performance Diagnostic Scan (Active Save)" -ForegroundColor White
@@ -2280,7 +2375,7 @@ function Show-PZMainMenu {
         $choice = Read-Host " Select an option (0-8)"
         switch ($choice.Trim()) {
             "1" {
-                Invoke-PZScanEngine
+                Invoke-PZScanEngine -CustomLog $CustomLogPath
                 Write-Host "Press Enter to return to menu..." -ForegroundColor Gray
                 Read-Host | Out-Null
             }
@@ -2400,11 +2495,11 @@ if ($Revert) {
 } elseif ($CleanSave) {
     Invoke-PZCleanSaveMods
 } elseif ($LocalWorkshop) {
-    Invoke-PZScanEngine -LocalWorkshopOnly -CustomWorkshopPath $CustomWorkshopPath
+    Invoke-PZScanEngine -LocalWorkshopOnly -CustomWorkshopPath $CustomWorkshopPath -CustomLog $CustomLogPath
 } elseif ($ServerConfigPath) {
-    Invoke-PZScanEngine -CustomServerIni $ServerConfigPath
+    Invoke-PZScanEngine -CustomServerIni $ServerConfigPath -CustomLog $CustomLogPath
 } elseif ($Auto -or $StutterRoster) {
-    Invoke-PZScanEngine
+    Invoke-PZScanEngine -CustomLog $CustomLogPath
 } else {
     Show-PZMainMenu
 }
