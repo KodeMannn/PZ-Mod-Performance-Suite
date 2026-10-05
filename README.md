@@ -75,6 +75,7 @@ PZ-Mod-Performance-Suite features 8 selectable operations to fit your workflow:
 
 ## 🔍 Key Features
 
+* **🎮 State-Gated vs. Continuous Hook Classification (v2.7.1):** Deeply parses Lua execution semantics (`OnTick`, `OnPlayerUpdate`) to distinguish true unconstrained per-frame loops from state-gated hooks that exit immediately via early return when idle (e.g., `if not DragAndDrop.hasPendingCancel then return end`, `if not player:getVehicle() then return end`). Accurately categorizes UI mods (such as `Equipment UI`, `CleanHotBar`, `Neat Crafting`) as `Situational: While Menu / UI Is Open` (+0.02 ms/frame idle) and vehicle mods as `Active: While Driving / Vehicle Streaming`, ensuring mods are never falsely accused of continuous frame drag when menus are closed or when walking on foot.
 * **📋 Full Stutter & Lag Spike Impact Roster (v2.7.0):** Clean, 1-line tabular roster displaying every active mod with predicted frame spike bounds, severity status, and exact gameplay trigger events. Replaces visual clutter with unified per-row severity colors (Red for CRITICAL, Yellow for HIGH, DarkYellow for MODERATE, Cyan for LOW, and DarkGray for NEGLIGIBLE). Sorted by impact severity and latency so passive mods always rest at the bottom.
 * **🎯 Top 10 Correlated Spike Culprits with Worthiness Filter (v2.7.0):** Deeply correlates recorded engine slow frames across up to the Top 10 highest-impact mods. Implements a strict worthiness filter (`Test-IsSpikeWorthy`) that rejects harmless cosmetic packs and passive `< 1 ms` mods, completely eliminating blind padding.
 * **🧱 World / Chunk Geometry vs. Character Skinned Mesh Differentiation (v2.7.0):** Accurately distinguishes world tile/chunk geometry and vehicle meshes (`media/voxel-studio/`, `models_X/World`, vehicle definitions) from character attachments (`media/clothing`, `models_X/Skinned`, hair). Character cosmetic mods are never falsely accused of causing chunk cache rebuild stalls or given unfair risk penalties.
@@ -146,46 +147,59 @@ PZ-Mod-Performance-Suite features 8 selectable operations to fit your workflow:
 ```text
 
 =================================================================
-   PROJECT ZOMBOID MOD PERFORMANCE & OPTIMIZATION SUITE v2.7.0  
+   PROJECT ZOMBOID MOD PERFORMANCE & OPTIMIZATION SUITE v2.7.1  
          Created by @KodeMannn with the help of Gemini          
 =================================================================
 
  [INFO] Detected Game Version: 42.21.0
- [INFO] Active Savegame: Outbreak / 2026-10-04_16-33-03
- [INFO] Total Enabled Mods to Audit: 56
+ [INFO] Active Savegame: Outbreak / 2026-10-05_05-24-34
+ [INFO] Total Enabled Mods to Audit: 74
 
 -----------------------------------------------------------------
    RUNTIME ENGINE TELEMETRY SUMMARY
 -----------------------------------------------------------------
  Configured Frame Cap : 240 FPS (Active: 240 FPS)
- GPU VRAM Usage       : 2381 MB free of 12282 MB
-   [!] GPU Thrashing  : 2 texture evictions (32 MiB swapped across PCIe)!
-       Top VRAM Loads : 6261 3D models for Viewpoint (170.79 MB), KATTAJ1 Military Pack (54.06 MB)
- Java Heap Allocation : 2736 MB used of 6992 MB
- JVM Garbage Collector: 0 Old Gen Freezes | Young Gen: 99 sweeps (avg 7.1 ms, 700 ms total)
- Slow Frames (>50ms)  : 19 recorded in last session
- Worst Frame Spike    : 446.4 ms (MAIN THREAD)
-   -> SPIKE ANATOMY   : 425.1 ms Engine & GC Pauses (95.2%) | 21.3 ms Chunk Meshing & Passes (4.8%)
-   -> ROOT CAUSE      : Severe Java Garbage Collection Freeze (Engine Memory Sweep)
-   -> ATTRIBUTION     : JVM Heap Garbage Collection. NOT caused by Lua UI or QOL mods.
-   -> ACTIONABLE FIX  : Apply Menu Option [4] (One-Click G1GC + 5ms Pause Tuning) to eliminate GC freezes.
-   -> TOP CORRELATED SPIKE CULPRITS:
-      [1] 6261 3D models for Viewpoint ... | Pred: ~350-550 ms [Severe Freeze]  | Chunk Border Traversal & High-Speed Driving
-      [2] Project Viewpoint QOL            | Pred: ~10-35 ms [Combat Hitch]     | Horde Proximity & Combat
-      [3] Functional Appliances 2          | Pred: ~10-35 ms [Combat Hitch]     | Horde Proximity & Combat
-      [4] ZombieBuddy                      | Pred: ~10-35 ms [Combat Hitch]     | Horde Proximity & Combat
-      [5] NeatUI XP Drop                   | Pred: ~2-8 ms [Frame Delay]        | Continuous (Every Single Frame)
- Chunk Cache Hitches  : Up to 40 mesh builds/chunk (Peak rebuild stall: 100.1 ms)
-   -> Top 3D Meshes   : 6261 3D models for Viewpoint [sour_kisel] (10241 meshes), Fluffy Hair (163 meshes)
+ Hardware Frame Times : GPU: 8.48 ms | Render CPU: 8.01 ms | Main Thread: 9.16 ms (~109 FPS cap)
+ Live World Simulation: 84 active zombies loaded in simulation radius (109 in-game FPS)
+ GPU VRAM Usage       : 978 MB free of 12282 MB
+   [!] GPU Thrashing  : 385 texture evictions (1641 MiB swapped across PCIe)!
+       Cause & Impact : VRAM saturated; PCIe texture swapping causes 100-250ms render hitching
+       Top VRAM Loads : 6261 3D models for Viewpoint (170.79 MB), Realistic Dashboard and Gauges (50.18 MB)
+ Java Heap Allocation : 3470 MB used of 9792 MB
+ JVM Garbage Collector: 0 Old Gen Freezes | Young Gen: 150 sweeps (avg 8.3 ms, 1246 ms total)
+ Slow Frames (>50ms)  : 44 recorded in last session
+ Worst Frame Spike    : 717.5 ms (RENDER THREAD)
+   -> SPIKE ANATOMY   : 709.3 ms Waiting for Main Thread (98.9%) | 8.2 ms Render Passes (1.1%)
+   -> ROOT CAUSE      : GPU Render Thread Blocked Waiting for CPU Main Thread Tick
+   -> ATTRIBUTION     : Main thread CPU tick budget overflow from excessive per-frame Lua loops.
+   -> ACTIONABLE FIX  : Lower in-game frame rate cap to 120 FPS (Option [5]) or reduce vehicle fleet mods.
+   -> TOP CORRELATED SPIKE CULPRITS (Up to Top 10 High/Moderate Impact):
+      [01] Project Viewpoint QOL            | Pred: ~10-35 ms [Combat Hitch]     | Horde Proximity & Combat
+      [02] Push Vehicle                     | Pred: ~5-15 ms [Minor Blip]        | Active: While Driving / Vehicle Streaming
+      [03] Construction 1P Viewpoint        | Pred: ~5-15 ms [Minor Blip]        | Periodic Timer (~Every 5-10s)
+      [04] Viewpoint Threat Detector        | Pred: ~5-15 ms [Minor Blip]        | Periodic Timer (~Every 5-10s)
+      [05] Tidy Up Meister                  | Pred: ~5-15 ms [Minor Blip]        | Periodic Timer (~Every 5-10s)
+      [06] Project Viewpoint Controller ... | Pred: ~5-15 ms [Minor Blip]        | Periodic Timer (~Every 5-10s)
+      [07] More Damaged Objects             | Pred: ~5-15 ms [Minor Blip]        | Periodic Timer (~Every 5-10s)
+      [08] Traits As Skills                 | Pred: ~5-15 ms [Minor Blip]        | Periodic Timer (~Every 5-10s)
+      [09] CleanHotBar                      | Pred: ~2-8 ms [Frame Delay]        | Situational: While Menu / UI Is Open
+      [10] Equipment UI - [Standalone]      | Pred: ~2-8 ms [Frame Delay]        | Situational: While Menu / UI Is Open
+ Chunk Cache Hitches  : Up to 173 mesh builds/chunk (Peak rebuild stall: 10.9 ms)
+   -> Top 3D Meshes   : 6261 3D models for Viewpoint (10241 world meshes), that DAMN Library (46 world meshes)
  File Override Clashes: 433 detected (431 Safe, 2 High/Moderate Risk)
 
 -----------------------------------------------------------------
    GLOBAL MODPACK RUNTIME BUDGET & LOOP DENSITY
 -----------------------------------------------------------------
- Cumulative Mod Frame Tax : +2.58 ms/frame (Continuous CPU tick overhead)
- Active Per-Frame Loops   : 2 permanent hooks firing every single frame
- Total Custom 3D Models   : 10512 meshes (285.77 MB textures across mods)
-   -> Top CPU Tick Tax: NeatUI XP Drop (+0.45 ms/frame), NeatUI Equipment (+0.45 ms/frame), Project Viewpoint QOL (+0.76 ms/frame)
+ Cumulative Mod Frame Tax : +1.26 ms/frame (Continuous CPU tick overhead)
+ Active Per-Frame Loops   : 0 permanent hooks firing every single frame
+ Total Custom 3D Models   : 10904 meshes (414.48 MB textures across mods)
+   -> Top CPU Tick Tax: Project Viewpoint QOL (+0.2 ms/frame), Push Vehicle (+0.11 ms/frame), Construction 1P Viewpoint (+0.05 ms/frame)
+
+ [MASS VEHICLE FLEET WARNING] 19 vehicle mods active (4 state-gated hooks)!
+         Vehicle mods register per-frame speed/gauge hooks (e.g. DorothyAnemometer).
+         Combined, your vehicle fleet contributes +0.08 ms/frame overhead & 352 meshes.
+         Recommendation: Trim vehicle mods you aren't currently driving.
 
 -----------------------------------------------------------------
    ACTIVE MODS RANKED BY STUTTER & LAG SPIKE POTENTIAL
@@ -195,13 +209,19 @@ PZ-Mod-Performance-Suite features 8 selectable operations to fit your workflow:
  ----- -------------------------------- | ---------------------------------- | -----------------------------------
  [01]  6261 3D models for Viewpoint ... | Pred: ~350-550 ms [Severe Freeze]  | Chunk Border Traversal & High-Speed Driving
  [02]  Project Viewpoint QOL            | Pred: ~10-35 ms [Combat Hitch]     | Horde Proximity & Combat
- [03]  Functional Appliances 2          | Pred: ~10-35 ms [Combat Hitch]     | Horde Proximity & Combat
- [04]  NeatUI XP Drop                   | Pred: ~2-8 ms [Frame Delay]        | Continuous (Every Single Frame)
- [05]  NeatUI Equipment                 | Pred: ~2-8 ms [Frame Delay]        | Continuous (Every Single Frame)
- [06]  Push Vehicle                     | Pred: ~5-15 ms [Minor Blip]        | Vehicle Spawn & Streaming
- [07]  Fluffy Hair                      | Pred: < 1 ms [Imperceptible]       | None (Passive / Static UI)
- [08]  Realistic Dashboard and Gauges   | Pred: ~5-15 ms [Minor Blip]        | Periodic Timer (~Every 5-10s)
+ [03]  ZombieBuddy                      | Pred: ~10-35 ms [Combat Hitch]     | Horde Proximity & Combat
+ [04]  Push Vehicle                     | Pred: ~5-15 ms [Minor Blip]        | Active: While Driving / Vehicle Streaming
+ [05]  Tidy Up Meister                  | Pred: ~5-15 ms [Minor Blip]        | Periodic Timer (~Every 5-10s)
+ [06]  Construction 1P Viewpoint        | Pred: ~5-15 ms [Minor Blip]        | Periodic Timer (~Every 5-10s)
+ [07]  Viewpoint Threat Detector        | Pred: ~5-15 ms [Minor Blip]        | Periodic Timer (~Every 5-10s)
+ [08]  '91 Nissan 240SX                 | Pred: ~5-15 ms [Minor Blip]        | Active: While Driving / Vehicle Streaming
+ [09]  Realistic Dashboard and Gauges   | Pred: ~5-15 ms [Minor Blip]        | Periodic Timer (~Every 5-10s)
+ [10]  Dynamic Gear Rattling            | Pred: ~5-15 ms [Minor Blip]        | Periodic Timer (~Every 5-10s)
  ...
+ [16]  Equipment UI - [Standalone]      | Pred: ~2-8 ms [Frame Delay]        | Situational: While Menu / UI Is Open
+ [17]  CleanHotBar                      | Pred: ~2-8 ms [Frame Delay]        | Situational: While Menu / UI Is Open
+ ...
+ [20]  Trailers!                        | Pred: < 1 ms [Imperceptible]       | Active: While Driving / Vehicle Streaming
 ```
 
 ---

@@ -1,6 +1,6 @@
 <# :
 @echo off
-title Project Zomboid Mod Performance ^& Optimization Suite v2.6.1
+title Project Zomboid Mod Performance ^& Optimization Suite v2.7.1
 color 0F
 powershell -NoProfile -ExecutionPolicy Bypass -Command "& ([scriptblock]::Create([System.IO.File]::ReadAllText('%~f0'))) %*"
 echo.
@@ -9,14 +9,14 @@ exit /b
 #>
 <#
 .SYNOPSIS
-    Project Zomboid Mod Performance & Optimization Suite v2.7.0
+    Project Zomboid Mod Performance & Optimization Suite v2.7.1
 .DESCRIPTION
     Comprehensive diagnostic scanner and optimization toolkit for Project Zomboid (Build 42 & 41).
     Features Precision Slow Frame Anatomy Dissection (Main vs Render Thread, GC pauses vs Chunk Cache),
     Causal Bottleneck Attribution (Zero False Mod Accusations), Full Stutter & Lag Spike Impact Roster,
     Hardware & Thread Headroom Telemetry (GPU ms, Render CPU ms, Main Thread ms, Entity Density),
-    Top 10 Correlated Spike Culprits with Strict Worthiness Filtering, Global Modpack Runtime Budget,
-    and 1-Click Engine Tuning.
+    Top 10 Correlated Spike Culprits with Strict Worthiness Filtering, State-Gated vs Continuous Hook
+    Classification, Global Modpack Runtime Budget, and 1-Click Engine Tuning.
 .AUTHOR
     KodeMannn (https://github.com/KodeMannn) - Coded with the assistance of Google Gemini
 #>
@@ -542,7 +542,7 @@ function Analyze-ModLuaSemantics([System.IO.FileInfo[]]$luaFiles) {
                 if ($code -match '%\s*\d+|tickCounter|RefreshTick|TimeToRefresh|TicksToComplete|getMultiplier\(\)|frameCounter|interval|throttle|Modulo') {
                     $throttledHooks++
                     $hookBreakdown += "$hookEvent (Throttled)"
-                } elseif ($code -match 'if\s+not\s+\w+\s+then\s+return|if\s+\w+\s*==\s*0\s+then\s+return|if\s+not\s+player:isMoving') {
+                } elseif ($code -match 'if\s+not\s+[\w\.:]+(\s+then|\s*\n\s*then|\s*\)\s*then)?\s*(\n\s*)?return|if\s+[\w\.:]+\s*==\s*(0|false|nil)\s+then|if\s+not\s+player:isMoving|player:getVehicle\(\)|player\.getVehicle|getVehicle\(\)\s*==\s*nil|isVehicle\s*==\s*false|if\s+not\s+self:isVisible|if\s+not\s+self\.isOpen|if\s+not\s+self\.isCollapsed|if\s+not\s+self\.shown') {
                     $throttledHooks++
                     $hookBreakdown += "$hookEvent (State-Gated)"
                 } else {
@@ -577,7 +577,8 @@ function Get-ModStutterMetrics {
         [int]$inHookWorldQueries,
         [int]$inHookInvQueries,
         [int]$riskScore,
-        [int]$worldMeshCount = 0
+        [int]$worldMeshCount = 0,
+        [string]$modName = ""
     )
 
     # 1. Potential Spike Duration (ms)
@@ -602,6 +603,9 @@ function Get-ModStutterMetrics {
     } elseif ($inHookWorldQueries -ge 5 -or $modId -match "TrueCrawling|Zombie") {
         $spikeMs = "~10-35 ms [Combat Hitch]"
         $spikeSeverity = "MODERATE"
+    } elseif (($modId -match "Equipment|Inventory|Hotbar|Crafting|Menu|Map|Health|DragAndDrop" -or $modName -match "Equipment|Inventory|Hotbar|Crafting|Menu|Map|Health") -and ($permHooks -gt 0 -or $throttledHooks -gt 0 -or $inHookInvQueries -gt 0)) {
+        $spikeMs = "~2-8 ms [Frame Delay]"
+        $spikeSeverity = "LOW"
     } elseif ($throttledHooks -gt 0) {
         $spikeMs = "~5-15 ms [Minor Blip]"
         $spikeSeverity = "LOW"
@@ -634,8 +638,10 @@ function Get-ModStutterMetrics {
         $trigger = "Horde Proximity & Combat"
     } elseif ($transHooks -ge 15 -or $modId -match "Journal|Burd") {
         $trigger = "Action: Transcribing / Reading XP"
-    } elseif ($modId -match "VanillaVehiclesAnimated|Vehicle") {
-        $trigger = "Vehicle Spawn & Streaming"
+    } elseif ($modId -match "Equipment|Inventory|Hotbar|Crafting|Menu|Map|Health|DragAndDrop" -or $modName -match "Equipment|Inventory|Hotbar|Crafting|Menu|Map|Health") {
+        $trigger = "Situational: While Menu / UI Is Open"
+    } elseif ($modId -match "VanillaVehiclesAnimated|Vehicle|jeep|chevy|ford|dodge|nissan|amgeneral|toyota|ferret|oshkosh|corvette|camaro|mustang|volvo|beetle|KI5") {
+        $trigger = "Active: While Driving / Vehicle Streaming"
     } elseif ($permHooks -ge 1) {
         $trigger = "Continuous (Every Single Frame)"
     } elseif ($throttledHooks -ge 1) {
@@ -678,7 +684,7 @@ function Test-IsSpikeWorthy($mod) {
 # ==============================================================================
 function Invoke-PZScanEngine([string]$CustomServerIni = "", [switch]$LocalWorkshopOnly, [string]$CustomWorkshopPath = "") {
     Write-Host "`n=================================================================" -ForegroundColor Cyan
-    Write-Host "   PROJECT ZOMBOID MOD PERFORMANCE & OPTIMIZATION SUITE v2.7.0  " -ForegroundColor Yellow
+    Write-Host "   PROJECT ZOMBOID MOD PERFORMANCE & OPTIMIZATION SUITE v2.7.1  " -ForegroundColor Yellow
     Write-Host "         Created by @KodeMannn with the help of Gemini          " -ForegroundColor DarkCyan
     Write-Host "=================================================================`n" -ForegroundColor Cyan
 
@@ -1045,7 +1051,8 @@ function Invoke-PZScanEngine([string]$CustomServerIni = "", [switch]$LocalWorksh
             -inHookWorldQueries $inHookWorldQueries `
             -inHookInvQueries $inHookInvQueries `
             -riskScore $riskScore `
-            -worldMeshCount $worldMeshCount
+            -worldMeshCount $worldMeshCount `
+            -modName $displayName
 
         $modReports += [PSCustomObject]@{
             ModId = $modId
@@ -1414,7 +1421,9 @@ function Invoke-PZScanEngine([string]$CustomServerIni = "", [switch]$LocalWorksh
     $vehicleCount = if ($vehicleMods) { $vehicleMods.Count } else { 0 }
     $vehiclePermLoops = if ($vehicleMods) { ($vehicleMods | Measure-Object -Property PermanentHooks -Sum).Sum } else { 0 }
     if (-not $vehiclePermLoops) { $vehiclePermLoops = 0 }
-    $vehicleTax = [math]::Round(($vehiclePermLoops * 0.45), 2)
+    $vehicleThrotLoops = if ($vehicleMods) { ($vehicleMods | Measure-Object -Property ThrottledHooks -Sum).Sum } else { 0 }
+    if (-not $vehicleThrotLoops) { $vehicleThrotLoops = 0 }
+    $vehicleTax = [math]::Round(($vehiclePermLoops * 0.45) + ($vehicleThrotLoops * 0.02), 2)
     $vehicleModels = if ($vehicleMods) { ($vehicleMods | Measure-Object -Property ModelCount -Sum).Sum } else { 0 }
     if (-not $vehicleModels) { $vehicleModels = 0 }
     $vehicleTexMB = if ($vehicleMods) { [math]::Round(($vehicleMods | Measure-Object -Property TextureMB -Sum).Sum, 2) } else { 0 }
@@ -1506,7 +1515,8 @@ function Invoke-PZScanEngine([string]$CustomServerIni = "", [switch]$LocalWorksh
     }
 
     if ($vehicleCount -ge 15) {
-        Write-Host "`n [MASS VEHICLE FLEET WARNING] $vehicleCount vehicle mods active ($vehiclePermLoops loops running)!" -ForegroundColor Red
+        $loopCountText = if ($vehiclePermLoops -gt 0) { "$vehiclePermLoops permanent loops" } elseif ($vehicleThrotLoops -gt 0) { "$vehicleThrotLoops state-gated hooks" } else { "0 active hooks" }
+        Write-Host "`n [MASS VEHICLE FLEET WARNING] $vehicleCount vehicle mods active ($loopCountText)!" -ForegroundColor $(if ($vehiclePermLoops -gt 0) { "Red" } else { "Yellow" })
         Write-Host "         Vehicle mods register per-frame speed/gauge hooks (e.g. DorothyAnemometer)." -ForegroundColor Yellow
         Write-Host "         Combined, your vehicle fleet contributes +$vehicleTax ms/frame overhead & $vehicleModels meshes." -ForegroundColor Gray
         Write-Host "         Recommendation: Trim vehicle mods you aren't currently driving." -ForegroundColor Cyan
@@ -1614,7 +1624,7 @@ function Invoke-PZScanEngine([string]$CustomServerIni = "", [switch]$LocalWorksh
     # Generate Markdown Report
     $md = @()
     $md += "# Project Zomboid Mod Performance & Optimization Diagnostic Report"
-    $md += "*Generated: $(Get-Date -Format 'yyyy-MM-dd HH:mm:ss') on $env:COMPUTERNAME by PZ-Mod-Performance-Suite v2.7.0 (Coded with the help of Google Gemini)*"
+    $md += "*Generated: $(Get-Date -Format 'yyyy-MM-dd HH:mm:ss') on $env:COMPUTERNAME by PZ-Mod-Performance-Suite v2.7.1 (Coded with the help of Google Gemini)*"
     $md += ""
     $md += "## Executive Summary"
     $md += "- **Game Version:** $pzVersion"
@@ -1780,7 +1790,7 @@ function Show-PZMainMenu {
     while ($true) {
         Clear-Host
         Write-Host "=================================================================" -ForegroundColor Cyan
-        Write-Host "   PROJECT ZOMBOID MOD PERFORMANCE & OPTIMIZATION SUITE v2.7.0  " -ForegroundColor Yellow
+        Write-Host "   PROJECT ZOMBOID MOD PERFORMANCE & OPTIMIZATION SUITE v2.7.1  " -ForegroundColor Yellow
         Write-Host "         Created by @KodeMannn with the help of Gemini          " -ForegroundColor DarkCyan
         Write-Host "=================================================================" -ForegroundColor Cyan
         Write-Host "  [1] Run Full Performance Diagnostic Scan (Active Save)" -ForegroundColor White
