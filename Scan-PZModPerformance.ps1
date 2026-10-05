@@ -1,6 +1,6 @@
 <#
 .SYNOPSIS
-    Project Zomboid Mod Performance & Optimization Suite v2.11.1
+    Project Zomboid Mod Performance & Optimization Suite v2.12.0
 .DESCRIPTION
     Comprehensive diagnostic scanner and optimization toolkit for Project Zomboid (Build 42 & 41).
     Features Precision Slow Frame Anatomy Dissection (Main vs Render Thread, GC pauses vs Chunk Cache),
@@ -562,6 +562,10 @@ function Analyze-ModLuaSemantics([System.IO.FileInfo[]]$luaFiles) {
     $transHooks = 0
     $throttledHooks = 0
     $hookBreakdown = @()
+    $inHookZombieQueries = 0
+    $staticZombieQueries = 0
+    $inHookTileQueries = 0
+    $staticTileQueries = 0
     $inHookWorldQueries = 0
     $staticWorldQueries = 0
     $inHookInvQueries = 0
@@ -593,8 +597,10 @@ function Analyze-ModLuaSemantics([System.IO.FileInfo[]]$luaFiles) {
         $addMatches = [regex]::Matches($code, 'Events\.(OnTick|OnRenderTick|OnPlayerUpdate|OnZombieUpdate|OnRender3D)\.Add\s*\(\s*([a-zA-Z0-9_\.:]+)?')
         $hasPerFrame = ($addMatches.Count -gt 0)
 
-        # Queries
-        $wq = ([regex]::Matches($code, 'getZombieList|getMovingObjects|getCharacters|getSquare|getGridSquare')).Count
+        # Queries: Differentiate entity/zombie scans from map tile/square lookups
+        $zq = ([regex]::Matches($code, 'getZombieList|getMovingObjects|getCharacters|getZombies|getHitReaction|getNearZombies')).Count
+        $tq = ([regex]::Matches($code, 'getSquare|getGridSquare|getIsoObject|getCell\(\):getGridSquare')).Count
+        $wq = $zq + $tq
         $heavyContainerPattern = 'refreshBackpacks|refreshContainer|refreshWeight|updateContainers|refreshFloor|applyContainers'
         $iq = ([regex]::Matches($code, "getAllItems|getItems|FindAndReturn|$heavyContainerPattern")).Count
         $hc = ([regex]::Matches($code, $heavyContainerPattern)).Count
@@ -604,12 +610,16 @@ function Analyze-ModLuaSemantics([System.IO.FileInfo[]]$luaFiles) {
         $jni = ([regex]::Matches($code, $jniPattern)).Count
 
         if ($hasPerFrame) {
+            $inHookZombieQueries += $zq
+            $inHookTileQueries += $tq
             $inHookWorldQueries += $wq
             $inHookInvQueries += $iq
             $inHookHeavyContainers += $hc
             $inHookUIPolls += $uiPoll
             $inHookJNICalls += $jni
         } else {
+            $staticZombieQueries += $zq
+            $staticTileQueries += $tq
             $staticWorldQueries += $wq
             $staticInvQueries += $iq
             $staticHeavyContainers += $hc
@@ -678,7 +688,7 @@ function Analyze-ModLuaSemantics([System.IO.FileInfo[]]$luaFiles) {
         $optInModeName = "All-Containers Mode"
     } elseif ($fullCode -match 'enable(\w+)(?:Hotkey|Toggle)') {
         $optInModeName = "$($matches[1]) Hotkey"
-    } elseif ($fullCode -match 'is(\w+)Active\(\)') {
+    } elseif ($fullCode -match '(?:^|[^\w\.])is([A-Z]\w+)Active\(\)' -and $matches[1] -notmatch 'Mod|PZ|Steam|Client|Server') {
         $optInModeName = "$($matches[1]) Mode"
     } elseif ($fullCode -match 'HOTKEY_BINDING') {
         $optInModeName = "Hotkey Action"
@@ -688,6 +698,10 @@ function Analyze-ModLuaSemantics([System.IO.FileInfo[]]$luaFiles) {
         PermanentHooks = $permHooks
         TransientHooks = $transHooks
         ThrottledHooks = $throttledHooks
+        InHookZombieQueries = $inHookZombieQueries
+        StaticZombieQueries = $staticZombieQueries
+        InHookTileQueries = $inHookTileQueries
+        StaticTileQueries = $staticTileQueries
         InHookWorldQueries = $inHookWorldQueries
         StaticWorldQueries = $staticWorldQueries
         InHookInvQueries = $inHookInvQueries
@@ -724,7 +738,9 @@ function Get-ModStutterMetrics {
         [int]$inHookJNICalls = 0,
         [bool]$isStationaryGated = $false,
         [bool]$isOptInToggle = $false,
-        [string]$optInModeName = ""
+        [string]$optInModeName = "",
+        [int]$inHookZombieQueries = 0,
+        [int]$inHookTileQueries = 0
     )
 
     # 1. Potential Spike Duration (ms)
@@ -734,12 +750,18 @@ function Get-ModStutterMetrics {
     if ($modId -match "PZVoxelStudioViewpoint" -or $worldMeshCount -gt 5000) {
         $spikeMs = "~350-550 ms [Severe Freeze]"
         $spikeSeverity = "CRITICAL"
-    } elseif ($worldMeshCount -gt 1000 -or $textureMB -gt 100) {
+    } elseif ($worldMeshCount -gt 1000) {
         $spikeMs = "~100-250 ms [Noticeable Hitch]"
+        $spikeSeverity = "HIGH"
+    } elseif ($textureMB -gt 100) {
+        $spikeMs = "~100-250 ms [VRAM Thrash Hitch]"
         $spikeSeverity = "HIGH"
     } elseif ($modId -match "aparosa_pz3dMinimap") {
         $spikeMs = "~50-120 ms [Continuous Lag]"
         $spikeSeverity = "CRITICAL"
+    } elseif ($modId -match "ALife|SuperbSurvivors|SubparSurvivors|NPC|Bandits|Humanoid" -or $modName -match "A-Life|Superb Survivors|NPCs|Bandits") {
+        $spikeMs = "~20-60 ms [AI Simulation Spike]"
+        $spikeSeverity = "MODERATE"
     } elseif ($transHooks -ge 15 -or $modId -match "Journal|Burd") {
         $spikeMs = "~50-150 ms [Action Spike]"
         $spikeSeverity = "HIGH"
@@ -754,9 +776,18 @@ function Get-ModStutterMetrics {
             $spikeMs = "~15-40 ms [Container Hitch]"
             $spikeSeverity = "MODERATE"
         }
-    } elseif ($inHookWorldQueries -ge 5 -or $modId -match "TrueCrawling|ZombieDismemberment|ZombieAnimation|ZombieCrawl") {
+    } elseif ($inHookZombieQueries -ge 3 -or $modId -match "TrueCrawling|ZombieDismemberment|ZombieAnimation|ZombieCrawl|ZombieCollision") {
         $spikeMs = "~10-35 ms [Combat Hitch]"
         $spikeSeverity = "MODERATE"
+    } elseif ($modId -match "TakeABath|BathAndShower|Shower|Hygiene" -or $modName -match "Take A Bath|Shower") {
+        $spikeMs = "~10-25 ms [Hygiene / Fluid Hitch]"
+        $spikeSeverity = "LOW"
+    } elseif ($modId -match "PushDoors|Push Door|CyesPushDoors" -or $modName -match "Push Doors") {
+        $spikeMs = "~5-15 ms [Door Hitch]"
+        $spikeSeverity = "LOW"
+    } elseif ($inHookTileQueries -ge 5) {
+        $spikeMs = "~5-15 ms [Object Query Blip]"
+        $spikeSeverity = "LOW"
     } elseif ($inHookUIPolls -ge 5 -and ($permHooks -gt 0 -or $throttledHooks -gt 0)) {
         $spikeMs = "~2-8 ms [UI Polling Delay]"
         $spikeSeverity = "LOW"
@@ -843,20 +874,36 @@ function Get-ModStutterMetrics {
     } else {
         "Situational: "
     }
-    if ($modId -match "PZVoxelStudioViewpoint" -or $worldMeshCount -ge 1000 -or $textureMB -ge 100) {
-        $trigger = "Chunk Border Traversal & High-Speed Driving"
-    } elseif ($inHookHeavyContainers -ge 1 -and ($modName -match "Viewpoint QOL|Container|Loot" -or $modId -match "ViewpointQOL|Container")) {
+    if ($modId -match "PZVoxelStudioViewpoint" -or $worldMeshCount -ge 1000) {
+        $trigger = "Chunk Border Traversal & High-Speed Driving (3D Mesh Rebuild)"
+    } elseif ($textureMB -ge 100) {
+        $trigger = "VRAM Texture Streaming & Asset Loading (PCIe Thrashing Risk)"
+    } elseif ($inHookHeavyContainers -ge 1) {
         if ($isStationaryGated) {
             $trigger = "$($optInPrefix)When Standing Still / Stationary (Container Rebuild - Zero Movement Hitch)"
-        } else {
+        } elseif ($modName -match "Viewpoint QOL" -or $modId -match "ViewpointQOL") {
             $trigger = "$($optInPrefix)Moving Near Containers (Backpack Rebuild - Unconstrained Movement Hitch)"
+        } else {
+            $trigger = "$($optInPrefix)While Inventory / Container Grid Open (Backpack & Weight Rebuild)"
         }
-    } elseif ($inHookWorldQueries -ge 5 -or $modId -match "TrueCrawling|ZombieDismemberment|ZombieAnimation|ZombieCrawl") {
+    } elseif ($modId -match "ALife|SuperbSurvivors|SubparSurvivors|NPC|Bandits|Humanoid" -or $modName -match "A-Life|Superb Survivors|NPCs|Bandits") {
+        $trigger = if ($permHooks -gt 0) { "Active: Autonomous NPC AI & Sensory Scanning ($permHooks background tick loops)" } else { "Active: Autonomous NPC AI & Sensory Scanning" }
+    } elseif ($inHookZombieQueries -ge 3 -or $modId -match "TrueCrawling|ZombieDismemberment|ZombieAnimation|ZombieCrawl|ZombieCollision") {
         $trigger = "Horde Proximity & Combat"
+    } elseif ($modId -match "PushDoors|Push Door|CyesPushDoors" -or $modName -match "Push Doors") {
+        $trigger = "Situational: Near Doors / While Forcing Doors Open"
+    } elseif ($modId -match "TakeABath|BathAndShower|Shower|Hygiene" -or $modName -match "Take A Bath|Shower") {
+        $trigger = "Situational: Near Plumbing Fixtures & Bathing Actions"
+    } elseif ($inHookTileQueries -ge 5) {
+        $trigger = "Situational: Near Interactive World Objects (Tile Scanning)"
     } elseif ($transHooks -ge 15 -or $modId -match "Journal|Burd") {
         $trigger = "Action: Transcribing / Reading XP"
     } elseif ($inHookUIPolls -ge 5 -or ($modName -match "Viewpoint QOL" -and $throttledHooks -gt 0)) {
-        $trigger = "$($optInPrefix)While in Viewpoint (UI Polling & Containers)"
+        if ($modName -match "Viewpoint QOL" -or $modId -match "ViewpointQOL") {
+            $trigger = "$($optInPrefix)While in Viewpoint (UI Polling & Containers)"
+        } else {
+            $trigger = "$($optInPrefix)While Menu / UI Is Open (High-Frequency UI Polling)"
+        }
     } elseif ($modId -match "RealisticDash|YourDash" -or $modName -match "Realistic Dashboard|Gauges") {
         $trigger = "Active: While Inside Vehicle / Driving"
     } elseif ($modId -match "PushVehicle" -or $modName -match "Push Vehicle") {
@@ -930,7 +977,7 @@ function Test-IsSpikeWorthy($mod) {
 # ==============================================================================
 function Invoke-PZScanEngine([string]$CustomServerIni = "", [switch]$LocalWorkshopOnly, [string]$CustomWorkshopPath = "") {
     Write-Host "`n=================================================================" -ForegroundColor Cyan
-    Write-Host "   PROJECT ZOMBOID MOD PERFORMANCE & OPTIMIZATION SUITE v2.11.1 " -ForegroundColor Yellow
+    Write-Host "   PROJECT ZOMBOID MOD PERFORMANCE & OPTIMIZATION SUITE v2.12.0 " -ForegroundColor Yellow
     Write-Host "         Created by @KodeMannn with the help of Gemini          " -ForegroundColor DarkCyan
     Write-Host "=================================================================`n" -ForegroundColor Cyan
 
@@ -1174,6 +1221,10 @@ function Invoke-PZScanEngine([string]$CustomServerIni = "", [switch]$LocalWorksh
         $permHooks = $luaSemantics.PermanentHooks
         $transHooks = $luaSemantics.TransientHooks
         $throttledHooks = $luaSemantics.ThrottledHooks
+        $inHookZombieQueries = $luaSemantics.InHookZombieQueries
+        $staticZombieQueries = $luaSemantics.StaticZombieQueries
+        $inHookTileQueries = $luaSemantics.InHookTileQueries
+        $staticTileQueries = $luaSemantics.StaticTileQueries
         $inHookWorldQueries = $luaSemantics.InHookWorldQueries
         $staticWorldQueries = $luaSemantics.StaticWorldQueries
         $inHookInvQueries = $luaSemantics.InHookInvQueries
@@ -1248,7 +1299,13 @@ function Invoke-PZScanEngine([string]$CustomServerIni = "", [switch]$LocalWorksh
         if ($transHooks -gt 0) {
             $dynamicReasons += "$transHooks transient / self-terminating hook$(if ($transHooks -ne 1) { 's' } else { '' }) (UI/bootstrap only)"
         }
-        if ($inHookWorldQueries -gt 0) {
+        if ($inHookZombieQueries -gt 0) {
+            $dynamicReasons += "$inHookZombieQueries in-hook entity/zombie scan$(if ($inHookZombieQueries -ne 1) { 's' } else { '' }) (getZombieList/getCharacters)"
+        }
+        if ($inHookTileQueries -gt 0) {
+            $dynamicReasons += "$inHookTileQueries in-hook map tile/object quer$(if ($inHookTileQueries -eq 1) { 'y' } else { 'ies' }) (getSquare/getGridSquare)"
+        }
+        if ($inHookWorldQueries -gt 0 -and $inHookZombieQueries -eq 0 -and $inHookTileQueries -eq 0) {
             $dynamicReasons += "$inHookWorldQueries in-hook world quer$(if ($inHookWorldQueries -eq 1) { 'y' } else { 'ies' }) (getSquare/getZombieList)"
         }
         if ($staticWorldQueries -gt 25) {
@@ -1322,7 +1379,9 @@ function Invoke-PZScanEngine([string]$CustomServerIni = "", [switch]$LocalWorksh
             -inHookJNICalls $inHookJNICalls `
             -isStationaryGated $luaSemantics.IsStationaryGated `
             -isOptInToggle $luaSemantics.IsOptInToggle `
-            -optInModeName $luaSemantics.OptInModeName
+            -optInModeName $luaSemantics.OptInModeName `
+            -inHookZombieQueries $inHookZombieQueries `
+            -inHookTileQueries $inHookTileQueries
 
         $modReports += [PSCustomObject]@{
             ModId = $modId
@@ -1333,6 +1392,10 @@ function Invoke-PZScanEngine([string]$CustomServerIni = "", [switch]$LocalWorksh
             PermanentHooks = $permHooks
             TransientHooks = $transHooks
             ThrottledHooks = $throttledHooks
+            InHookZombieQueries = $inHookZombieQueries
+            StaticZombieQueries = $staticZombieQueries
+            InHookTileQueries = $inHookTileQueries
+            StaticTileQueries = $staticTileQueries
             InHookWorldQueries = $inHookWorldQueries
             StaticWorldQueries = $staticWorldQueries
             TotalWorldQueries = $totalWorldQueries
@@ -1905,7 +1968,7 @@ function Invoke-PZScanEngine([string]$CustomServerIni = "", [switch]$LocalWorksh
     $md = @()
     $md += "# Project Zomboid Mod Performance & Optimization Diagnostic Report"
     $hostName = if ($env:COMPUTERNAME) { $env:COMPUTERNAME } elseif ($env:HOSTNAME) { $env:HOSTNAME } else { [System.Net.Dns]::GetHostName() }
-    $md += "*Generated: $(Get-Date -Format 'yyyy-MM-dd HH:mm:ss') on $hostName by PZ-Mod-Performance-Suite v2.11.1 (Coded with the help of Google Gemini)*"
+    $md += "*Generated: $(Get-Date -Format 'yyyy-MM-dd HH:mm:ss') on $hostName by PZ-Mod-Performance-Suite v2.12.0 (Coded with the help of Google Gemini)*"
     $md += ""
     $md += "## Executive Summary"
     $md += "- **Game Version:** $pzVersion"
@@ -2075,7 +2138,7 @@ function Show-PZMainMenu {
     while ($true) {
         Clear-Host
         Write-Host "=================================================================" -ForegroundColor Cyan
-        Write-Host "   PROJECT ZOMBOID MOD PERFORMANCE & OPTIMIZATION SUITE v2.11.1 " -ForegroundColor Yellow
+        Write-Host "   PROJECT ZOMBOID MOD PERFORMANCE & OPTIMIZATION SUITE v2.12.0 " -ForegroundColor Yellow
         Write-Host "         Created by @KodeMannn with the help of Gemini          " -ForegroundColor DarkCyan
         Write-Host "=================================================================" -ForegroundColor Cyan
         Write-Host "  [1] Run Full Performance Diagnostic Scan (Active Save)" -ForegroundColor White
