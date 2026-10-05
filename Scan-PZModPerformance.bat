@@ -1,6 +1,6 @@
 <# :
 @echo off
-title Project Zomboid Mod Performance ^& Optimization Suite v2.8.0
+title Project Zomboid Mod Performance ^& Optimization Suite v2.9.0
 color 0F
 powershell -NoProfile -ExecutionPolicy Bypass -Command "& ([scriptblock]::Create([System.IO.File]::ReadAllText('%~f0'))) %*"
 echo.
@@ -9,7 +9,7 @@ exit /b
 #>
 <#
 .SYNOPSIS
-    Project Zomboid Mod Performance & Optimization Suite v2.8.0
+    Project Zomboid Mod Performance & Optimization Suite v2.9.0
 .DESCRIPTION
     Comprehensive diagnostic scanner and optimization toolkit for Project Zomboid (Build 42 & 41).
     Features Precision Slow Frame Anatomy Dissection (Main vs Render Thread, GC pauses vs Chunk Cache),
@@ -486,6 +486,12 @@ function Analyze-ModLuaSemantics([System.IO.FileInfo[]]$luaFiles) {
     $staticWorldQueries = 0
     $inHookInvQueries = 0
     $staticInvQueries = 0
+    $inHookHeavyContainers = 0
+    $staticHeavyContainers = 0
+    $inHookUIPolls = 0
+    $staticUIPolls = 0
+    $inHookJNICalls = 0
+    $staticJNICalls = 0
 
     $fileData = @()
     $fullCodeBuilder = New-Object System.Text.StringBuilder
@@ -509,14 +515,26 @@ function Analyze-ModLuaSemantics([System.IO.FileInfo[]]$luaFiles) {
 
         # Queries
         $wq = ([regex]::Matches($code, 'getZombieList|getMovingObjects|getCharacters|getSquare|getGridSquare')).Count
-        $iq = ([regex]::Matches($code, 'getAllItems|getItems|FindAndReturn')).Count
+        $heavyContainerPattern = 'refreshBackpacks|refreshContainer|refreshWeight|updateContainers|refreshFloor|applyContainers'
+        $iq = ([regex]::Matches($code, "getAllItems|getItems|FindAndReturn|$heavyContainerPattern")).Count
+        $hc = ([regex]::Matches($code, $heavyContainerPattern)).Count
+        $uiPollPattern = 'UIManager\.(getUI|findWidget|getWidgets)|:isReallyVisible\(\)|:getIsVisible\(\)|:isVisible\(\)'
+        $uiPoll = ([regex]::Matches($code, $uiPollPattern)).Count
+        $jniPattern = 'luajava\.bindClass|Class\.forName|\.getDeclaredMethod|\.getMethod|\.invoke\(|ViewpointQOLSettings'
+        $jni = ([regex]::Matches($code, $jniPattern)).Count
 
         if ($hasPerFrame) {
             $inHookWorldQueries += $wq
             $inHookInvQueries += $iq
+            $inHookHeavyContainers += $hc
+            $inHookUIPolls += $uiPoll
+            $inHookJNICalls += $jni
         } else {
             $staticWorldQueries += $wq
             $staticInvQueries += $iq
+            $staticHeavyContainers += $hc
+            $staticUIPolls += $uiPoll
+            $staticJNICalls += $jni
         }
 
         foreach ($m in $addMatches) {
@@ -538,11 +556,31 @@ function Analyze-ModLuaSemantics([System.IO.FileInfo[]]$luaFiles) {
                 $transHooks++
                 $hookBreakdown += "$hookEvent (Transient)"
             } else {
-                # Throttled / modulo / interval timer / idle condition guard
-                if ($code -match '%\s*\d+|tickCounter|RefreshTick|TimeToRefresh|TicksToComplete|getMultiplier\(\)|frameCounter|interval|throttle|Modulo') {
+                # Function-scoped extraction: inspect the specific handler function if available
+                $targetCode = $code
+                if ($funcName) {
+                    $esc = [regex]::Escape($funcName)
+                    $funcRegex = "(?s)(?:local\s+function\s+$esc|function\s+$esc|$esc\s*=\s*function)\s*\([^\)]*\)(.*?)(?=(\r?\n\s*(?:local\s+)?function\s|\r?\n\s*[a-zA-Z0-9_\.:]+\s*=\s*function|\Z))"
+                    $fMatch = [regex]::Match($code, $funcRegex)
+                    if (-not $fMatch.Success) {
+                        $fMatch = [regex]::Match($fullCode, $funcRegex)
+                    }
+                    if ($fMatch.Success -and $fMatch.Groups[1].Value.Length -gt 15) {
+                        $targetCode = $fMatch.Groups[1].Value
+                    }
+                }
+
+                $hasThrottle = ($targetCode -match '%\s*\d+|tickCounter|RefreshTick|TimeToRefresh|TicksToComplete|getMultiplier\(\)|frameCounter|interval|throttle|Modulo|\boptionsSyncCounter\b|\bcontainersRefreshCounter\b')
+                $hasStateGate = ($targetCode -match 'if\s+not\s+[\w\.:]+(\s+then|\s*\n\s*then|\s*\)\s*then)?\s*(\n\s*)?return|if\s+[\w\.:]+\s*==\s*(0|false|nil)\s+then|if\s+#\w+\s*==\s*0\s+then|if\s+not\s+player:isMoving|isPlayerMoving|isDriving|player:getVehicle\(\)|player\.getVehicle|getVehicle\(\)\s*==\s*nil|isVehicle\s*==\s*false|active\(\)|usablePlayer|C1PVBridge|if\s+not\s+self:isVisible|if\s+not\s+self\.isOpen|if\s+not\s+self\.isCollapsed|if\s+not\s+self\.shown')
+                $hasUnthrottledPerFrameWork = ($targetCode -match 'is(?:Inventory|Radial|Device|Menu|Window)Open|UIManager\.|getMovingObjects|getZombieList')
+
+                if ($hasThrottle -and $hasUnthrottledPerFrameWork) {
+                    $throttledHooks++
+                    $hookBreakdown += "$hookEvent (Hybrid / UI-Gated)"
+                } elseif ($hasThrottle) {
                     $throttledHooks++
                     $hookBreakdown += "$hookEvent (Throttled)"
-                } elseif ($code -match 'if\s+not\s+[\w\.:]+(\s+then|\s*\n\s*then|\s*\)\s*then)?\s*(\n\s*)?return|if\s+[\w\.:]+\s*==\s*(0|false|nil)\s+then|if\s+#\w+\s*==\s*0\s+then|if\s+not\s+player:isMoving|isPlayerMoving|isDriving|player:getVehicle\(\)|player\.getVehicle|getVehicle\(\)\s*==\s*nil|isVehicle\s*==\s*false|active\(\)|usablePlayer|C1PVBridge|if\s+not\s+self:isVisible|if\s+not\s+self\.isOpen|if\s+not\s+self\.isCollapsed|if\s+not\s+self\.shown') {
+                } elseif ($hasStateGate) {
                     $throttledHooks++
                     $hookBreakdown += "$hookEvent (State-Gated)"
                 } else {
@@ -561,6 +599,12 @@ function Analyze-ModLuaSemantics([System.IO.FileInfo[]]$luaFiles) {
         StaticWorldQueries = $staticWorldQueries
         InHookInvQueries = $inHookInvQueries
         StaticInvQueries = $staticInvQueries
+        InHookHeavyContainers = $inHookHeavyContainers
+        StaticHeavyContainers = $staticHeavyContainers
+        InHookUIPolls = $inHookUIPolls
+        StaticUIPolls = $staticUIPolls
+        InHookJNICalls = $inHookJNICalls
+        StaticJNICalls = $staticJNICalls
         HookBreakdown = $hookBreakdown
     }
 }
@@ -578,7 +622,10 @@ function Get-ModStutterMetrics {
         [int]$inHookInvQueries,
         [int]$riskScore,
         [int]$worldMeshCount = 0,
-        [string]$modName = ""
+        [string]$modName = "",
+        [int]$inHookHeavyContainers = 0,
+        [int]$inHookUIPolls = 0,
+        [int]$inHookJNICalls = 0
     )
 
     # 1. Potential Spike Duration (ms)
@@ -600,9 +647,18 @@ function Get-ModStutterMetrics {
     } elseif ($modId -match "VanillaVehiclesAnimated" -or $worldMeshCount -gt 200) {
         $spikeMs = "~20-60 ms [Micro-Stutter]"
         $spikeSeverity = "MODERATE"
+    } elseif ($inHookHeavyContainers -ge 1) {
+        $spikeMs = "~15-40 ms [Container Hitch]"
+        $spikeSeverity = "MODERATE"
     } elseif ($inHookWorldQueries -ge 5 -or $modId -match "TrueCrawling|ZombieDismemberment|ZombieAnimation|ZombieCrawl") {
         $spikeMs = "~10-35 ms [Combat Hitch]"
         $spikeSeverity = "MODERATE"
+    } elseif ($inHookUIPolls -ge 5 -and ($permHooks -gt 0 -or $throttledHooks -gt 0)) {
+        $spikeMs = "~2-8 ms [UI Polling Delay]"
+        $spikeSeverity = "LOW"
+    } elseif ($inHookJNICalls -ge 5 -and ($permHooks -gt 0 -or $throttledHooks -gt 0)) {
+        $spikeMs = "~2-8 ms [JNI Settings Delay]"
+        $spikeSeverity = "LOW"
     } elseif (($modId -match "Equipment|Inventory|Hotbar|Crafting|Menu|Map|Health|DragAndDrop" -or $modName -match "Equipment|Inventory|Hotbar|Crafting|Menu|Map|Health") -and ($permHooks -gt 0 -or $throttledHooks -gt 0 -or $inHookInvQueries -gt 0)) {
         $spikeMs = "~2-8 ms [Frame Delay]"
         $spikeSeverity = "LOW"
@@ -650,9 +706,9 @@ function Get-ModStutterMetrics {
     # 2. Continuous Frame Time Tax (+X.XX ms / frame)
     # Queries in permanent per-frame loops run continuously; queries in throttled hooks run periodically
     $queryTax = if ($permHooks -gt 0) {
-        ($inHookWorldQueries * 0.08) + ($inHookInvQueries * 0.04)
+        ($inHookWorldQueries * 0.08) + ($inHookInvQueries * 0.04) + ($inHookHeavyContainers * 0.15) + ($inHookUIPolls * 0.02) + ($inHookJNICalls * 0.02)
     } elseif ($throttledHooks -gt 0) {
-        ($inHookWorldQueries * 0.015) + ($inHookInvQueries * 0.01)
+        ($inHookWorldQueries * 0.015) + ($inHookInvQueries * 0.01) + ($inHookHeavyContainers * 0.04) + ($inHookUIPolls * 0.005) + ($inHookJNICalls * 0.005)
     } else {
         0.0
     }
@@ -667,10 +723,14 @@ function Get-ModStutterMetrics {
     $trigger = "None (Passive / Static UI)"
     if ($modId -match "PZVoxelStudioViewpoint" -or $worldMeshCount -ge 1000 -or $textureMB -ge 100) {
         $trigger = "Chunk Border Traversal & High-Speed Driving"
+    } elseif ($inHookHeavyContainers -ge 1 -and ($modName -match "Viewpoint QOL|Container|Loot" -or $modId -match "ViewpointQOL|Container")) {
+        $trigger = "Situational: Moving Near Containers (Backpack Rebuild)"
     } elseif ($inHookWorldQueries -ge 5 -or $modId -match "TrueCrawling|ZombieDismemberment|ZombieAnimation|ZombieCrawl") {
         $trigger = "Horde Proximity & Combat"
     } elseif ($transHooks -ge 15 -or $modId -match "Journal|Burd") {
         $trigger = "Action: Transcribing / Reading XP"
+    } elseif ($inHookUIPolls -ge 5 -or ($modName -match "Viewpoint QOL" -and $throttledHooks -gt 0)) {
+        $trigger = "Situational: While in Viewpoint (UI Polling & Containers)"
     } elseif ($modId -match "RealisticDash|YourDash" -or $modName -match "Realistic Dashboard|Gauges") {
         $trigger = "Active: While Inside Vehicle / Driving"
     } elseif ($modId -match "PushVehicle" -or $modName -match "Push Vehicle") {
@@ -727,6 +787,8 @@ function Test-IsSpikeWorthy($mod) {
     if ($hasTax -or 
         $mod.PermanentHooks -gt 0 -or 
         $mod.InHookWorldQueries -gt 0 -or 
+        $mod.InHookHeavyContainers -gt 0 -or 
+        $mod.InHookUIPolls -ge 5 -or 
         $mod.ThrottledHooks -gt 0 -or 
         $mod.WorldMeshCount -ge 200 -or 
         $mod.TextureMB -ge 50 -or 
@@ -741,7 +803,7 @@ function Test-IsSpikeWorthy($mod) {
 # ==============================================================================
 function Invoke-PZScanEngine([string]$CustomServerIni = "", [switch]$LocalWorkshopOnly, [string]$CustomWorkshopPath = "") {
     Write-Host "`n=================================================================" -ForegroundColor Cyan
-    Write-Host "   PROJECT ZOMBOID MOD PERFORMANCE & OPTIMIZATION SUITE v2.8.0  " -ForegroundColor Yellow
+    Write-Host "   PROJECT ZOMBOID MOD PERFORMANCE & OPTIMIZATION SUITE v2.9.0  " -ForegroundColor Yellow
     Write-Host "         Created by @KodeMannn with the help of Gemini          " -ForegroundColor DarkCyan
     Write-Host "=================================================================`n" -ForegroundColor Cyan
 
@@ -989,6 +1051,12 @@ function Invoke-PZScanEngine([string]$CustomServerIni = "", [switch]$LocalWorksh
         $staticWorldQueries = $luaSemantics.StaticWorldQueries
         $inHookInvQueries = $luaSemantics.InHookInvQueries
         $staticInvQueries = $luaSemantics.StaticInvQueries
+        $inHookHeavyContainers = $luaSemantics.InHookHeavyContainers
+        $staticHeavyContainers = $luaSemantics.StaticHeavyContainers
+        $inHookUIPolls = $luaSemantics.InHookUIPolls
+        $staticUIPolls = $luaSemantics.StaticUIPolls
+        $inHookJNICalls = $luaSemantics.InHookJNICalls
+        $staticJNICalls = $luaSemantics.StaticJNICalls
         $totalWorldQueries = $inHookWorldQueries + $staticWorldQueries
         $totalInvQueries = $inHookInvQueries + $staticInvQueries
         $perFrameTotal = $permHooks + $transHooks + $throttledHooks
@@ -1029,6 +1097,9 @@ function Invoke-PZScanEngine([string]$CustomServerIni = "", [switch]$LocalWorksh
         $riskScore += [math]::Min(5, [math]::Floor($staticWorldQueries / 20))
         $riskScore += [math]::Min(15, [math]::Floor($inHookInvQueries / 2))
         $riskScore += [math]::Min(3, [math]::Floor($staticInvQueries / 50))
+        $riskScore += [math]::Min(20, $inHookHeavyContainers * 5)
+        $riskScore += [math]::Min(15, [math]::Floor($inHookUIPolls / 2))
+        $riskScore += [math]::Min(10, [math]::Floor($inHookJNICalls / 3))
 
         if ($worldMeshCount -gt 5000) { $riskScore += 45 }
         elseif ($worldMeshCount -gt 1000) { $riskScore += 25 }
@@ -1058,6 +1129,15 @@ function Invoke-PZScanEngine([string]$CustomServerIni = "", [switch]$LocalWorksh
         }
         if ($inHookInvQueries -gt 5) {
             $dynamicReasons += "$inHookInvQueries in-hook inventory searches"
+        }
+        if ($inHookHeavyContainers -gt 0) {
+            $dynamicReasons += "$inHookHeavyContainers heavy container rebuild call$(if ($inHookHeavyContainers -ne 1) { 's' } else { '' }) (refreshBackpacks/refreshWeight)"
+        }
+        if ($inHookUIPolls -gt 5) {
+            $dynamicReasons += "$inHookUIPolls per-frame UI tree inquiries (UIManager/getIsVisible polling)"
+        }
+        if ($inHookJNICalls -gt 5) {
+            $dynamicReasons += "$inHookJNICalls cross-boundary Java/JNI reflection calls in tick loop"
         }
         if ($worldMeshCount -gt 50 -and -not ($riskReasons -match "model")) {
             $dynamicReasons += "$worldMeshCount custom 3D world model definitions"
@@ -1109,7 +1189,10 @@ function Invoke-PZScanEngine([string]$CustomServerIni = "", [switch]$LocalWorksh
             -inHookInvQueries $inHookInvQueries `
             -riskScore $riskScore `
             -worldMeshCount $worldMeshCount `
-            -modName $displayName
+            -modName $displayName `
+            -inHookHeavyContainers $inHookHeavyContainers `
+            -inHookUIPolls $inHookUIPolls `
+            -inHookJNICalls $inHookJNICalls
 
         $modReports += [PSCustomObject]@{
             ModId = $modId
@@ -1126,6 +1209,9 @@ function Invoke-PZScanEngine([string]$CustomServerIni = "", [switch]$LocalWorksh
             InHookInvQueries = $inHookInvQueries
             StaticInvQueries = $staticInvQueries
             TotalInvQueries = $totalInvQueries
+            InHookHeavyContainers = $inHookHeavyContainers
+            InHookUIPolls = $inHookUIPolls
+            InHookJNICalls = $inHookJNICalls
             SizeMB = $totalMB
             TextureMB = $textureMB
             ModelCount = $modelCount
@@ -1681,7 +1767,7 @@ function Invoke-PZScanEngine([string]$CustomServerIni = "", [switch]$LocalWorksh
     # Generate Markdown Report
     $md = @()
     $md += "# Project Zomboid Mod Performance & Optimization Diagnostic Report"
-    $md += "*Generated: $(Get-Date -Format 'yyyy-MM-dd HH:mm:ss') on $env:COMPUTERNAME by PZ-Mod-Performance-Suite v2.8.0 (Coded with the help of Google Gemini)*"
+    $md += "*Generated: $(Get-Date -Format 'yyyy-MM-dd HH:mm:ss') on $env:COMPUTERNAME by PZ-Mod-Performance-Suite v2.9.0 (Coded with the help of Google Gemini)*"
     $md += ""
     $md += "## Executive Summary"
     $md += "- **Game Version:** $pzVersion"
@@ -1847,7 +1933,7 @@ function Show-PZMainMenu {
     while ($true) {
         Clear-Host
         Write-Host "=================================================================" -ForegroundColor Cyan
-        Write-Host "   PROJECT ZOMBOID MOD PERFORMANCE & OPTIMIZATION SUITE v2.8.0  " -ForegroundColor Yellow
+        Write-Host "   PROJECT ZOMBOID MOD PERFORMANCE & OPTIMIZATION SUITE v2.9.0  " -ForegroundColor Yellow
         Write-Host "         Created by @KodeMannn with the help of Gemini          " -ForegroundColor DarkCyan
         Write-Host "=================================================================" -ForegroundColor Cyan
         Write-Host "  [1] Run Full Performance Diagnostic Scan (Active Save)" -ForegroundColor White
