@@ -1,6 +1,6 @@
 <#
 .SYNOPSIS
-    Project Zomboid Mod Performance & Optimization Suite v2.11.0
+    Project Zomboid Mod Performance & Optimization Suite v2.11.1
 .DESCRIPTION
     Comprehensive diagnostic scanner and optimization toolkit for Project Zomboid (Build 42 & 41).
     Features Precision Slow Frame Anatomy Dissection (Main vs Render Thread, GC pauses vs Chunk Cache),
@@ -673,6 +673,16 @@ function Analyze-ModLuaSemantics([System.IO.FileInfo[]]$luaFiles) {
 
     $isStationaryGated = ($fullCode -match 'not\s+player:isPlayerMoving|not\s+isPlayerMoving|not\s+player:isMoving|not\s+isMoving|isStationary|not\s+\w+:isPlayerMoving|isPlayerStationary')
     $isOptInToggle = ($fullCode -match 'isActive\(\)|isEnabled\b|toggleState|isToggled|getCustomOption|HOTKEY_BINDING')
+    $optInModeName = $null
+    if ($fullCode -match 'ViewpointQOLContainers|enableContainersHotkey|containersKey') {
+        $optInModeName = "All-Containers Mode"
+    } elseif ($fullCode -match 'enable(\w+)(?:Hotkey|Toggle)') {
+        $optInModeName = "$($matches[1]) Hotkey"
+    } elseif ($fullCode -match 'is(\w+)Active\(\)') {
+        $optInModeName = "$($matches[1]) Mode"
+    } elseif ($fullCode -match 'HOTKEY_BINDING') {
+        $optInModeName = "Hotkey Action"
+    }
 
     return [PSCustomObject]@{
         PermanentHooks = $permHooks
@@ -691,6 +701,7 @@ function Analyze-ModLuaSemantics([System.IO.FileInfo[]]$luaFiles) {
         HookBreakdown = $hookBreakdown
         IsStationaryGated = $isStationaryGated
         IsOptInToggle = $isOptInToggle
+        OptInModeName = $optInModeName
     }
 }
 
@@ -712,7 +723,8 @@ function Get-ModStutterMetrics {
         [int]$inHookUIPolls = 0,
         [int]$inHookJNICalls = 0,
         [bool]$isStationaryGated = $false,
-        [bool]$isOptInToggle = $false
+        [bool]$isOptInToggle = $false,
+        [string]$optInModeName = ""
     )
 
     # 1. Potential Spike Duration (ms)
@@ -824,7 +836,13 @@ function Get-ModStutterMetrics {
 
     # 3. Stutter Trigger Scenario
     $trigger = "None (Passive / Static UI)"
-    $optInPrefix = if ($isOptInToggle) { "Opt-In Hotkey Mode: " } else { "Situational: " }
+    $optInPrefix = if ($optInModeName) {
+        "Opt-In [$optInModeName]: "
+    } elseif ($isOptInToggle) {
+        "Opt-In Mode: "
+    } else {
+        "Situational: "
+    }
     if ($modId -match "PZVoxelStudioViewpoint" -or $worldMeshCount -ge 1000 -or $textureMB -ge 100) {
         $trigger = "Chunk Border Traversal & High-Speed Driving"
     } elseif ($inHookHeavyContainers -ge 1 -and ($modName -match "Viewpoint QOL|Container|Loot" -or $modId -match "ViewpointQOL|Container")) {
@@ -912,7 +930,7 @@ function Test-IsSpikeWorthy($mod) {
 # ==============================================================================
 function Invoke-PZScanEngine([string]$CustomServerIni = "", [switch]$LocalWorkshopOnly, [string]$CustomWorkshopPath = "") {
     Write-Host "`n=================================================================" -ForegroundColor Cyan
-    Write-Host "   PROJECT ZOMBOID MOD PERFORMANCE & OPTIMIZATION SUITE v2.11.0 " -ForegroundColor Yellow
+    Write-Host "   PROJECT ZOMBOID MOD PERFORMANCE & OPTIMIZATION SUITE v2.11.1 " -ForegroundColor Yellow
     Write-Host "         Created by @KodeMannn with the help of Gemini          " -ForegroundColor DarkCyan
     Write-Host "=================================================================`n" -ForegroundColor Cyan
 
@@ -1303,7 +1321,8 @@ function Invoke-PZScanEngine([string]$CustomServerIni = "", [switch]$LocalWorksh
             -inHookUIPolls $inHookUIPolls `
             -inHookJNICalls $inHookJNICalls `
             -isStationaryGated $luaSemantics.IsStationaryGated `
-            -isOptInToggle $luaSemantics.IsOptInToggle
+            -isOptInToggle $luaSemantics.IsOptInToggle `
+            -optInModeName $luaSemantics.OptInModeName
 
         $modReports += [PSCustomObject]@{
             ModId = $modId
@@ -1886,7 +1905,7 @@ function Invoke-PZScanEngine([string]$CustomServerIni = "", [switch]$LocalWorksh
     $md = @()
     $md += "# Project Zomboid Mod Performance & Optimization Diagnostic Report"
     $hostName = if ($env:COMPUTERNAME) { $env:COMPUTERNAME } elseif ($env:HOSTNAME) { $env:HOSTNAME } else { [System.Net.Dns]::GetHostName() }
-    $md += "*Generated: $(Get-Date -Format 'yyyy-MM-dd HH:mm:ss') on $hostName by PZ-Mod-Performance-Suite v2.11.0 (Coded with the help of Google Gemini)*"
+    $md += "*Generated: $(Get-Date -Format 'yyyy-MM-dd HH:mm:ss') on $hostName by PZ-Mod-Performance-Suite v2.11.1 (Coded with the help of Google Gemini)*"
     $md += ""
     $md += "## Executive Summary"
     $md += "- **Game Version:** $pzVersion"
@@ -2056,7 +2075,7 @@ function Show-PZMainMenu {
     while ($true) {
         Clear-Host
         Write-Host "=================================================================" -ForegroundColor Cyan
-        Write-Host "   PROJECT ZOMBOID MOD PERFORMANCE & OPTIMIZATION SUITE v2.11.0 " -ForegroundColor Yellow
+        Write-Host "   PROJECT ZOMBOID MOD PERFORMANCE & OPTIMIZATION SUITE v2.11.1 " -ForegroundColor Yellow
         Write-Host "         Created by @KodeMannn with the help of Gemini          " -ForegroundColor DarkCyan
         Write-Host "=================================================================" -ForegroundColor Cyan
         Write-Host "  [1] Run Full Performance Diagnostic Scan (Active Save)" -ForegroundColor White

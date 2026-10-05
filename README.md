@@ -18,14 +18,14 @@ Whether you're running a heavily modded singleplayer save or hosting a dedicated
 
 ## ⚡ Quick Start
 
-### 🪟 Windows (One-Click Executable)
-1. **Download**: Grab [`Scan-PZModPerformance.bat`](https://github.com/KodeMannn/PZ-Mod-Performance-Suite/releases/latest) (single-file, zero dependencies).
+### 🪟 Windows (One-Click Standalone Executable)
+1. **Download**: Grab [**`Scan-PZModPerformance.bat`**](https://github.com/KodeMannn/PZ-Mod-Performance-Suite/releases/latest/download/Scan-PZModPerformance.bat) directly (single-file standalone executable — zero dependencies, zero zip extraction required).
 2. **Run**: Double-click `Scan-PZModPerformance.bat` anywhere on your computer (Desktop, your `Zomboid` folder, or server directory).
 3. **Choose Option**: Use the interactive terminal menu to run a full diagnostic scan, apply 1-click JVM GC optimization, set safe frame caps, clean ghost mods, or revert changes.
 4. **Play Smooth**: Review the color-coded report before surviving Kentucky with zero micro-stutters.
 
 ### 🐧 Linux & 🍎 macOS (including Steam Deck / SteamOS)
-1. **Download**: Grab [`Scan-PZModPerformance.sh`](https://github.com/KodeMannn/PZ-Mod-Performance-Suite/releases/latest) and `Scan-PZModPerformance.ps1` (or download the release `.zip` / `.tar.gz`).
+1. **Download**: Grab [**`Scan-PZModPerformance.sh`**](https://github.com/KodeMannn/PZ-Mod-Performance-Suite/releases/latest/download/Scan-PZModPerformance.sh) and [**`Scan-PZModPerformance.ps1`**](https://github.com/KodeMannn/PZ-Mod-Performance-Suite/releases/latest/download/Scan-PZModPerformance.ps1) directly into the same folder (direct downloads — no zip archive required).
 2. **Make Executable & Run**:
    ```bash
    chmod +x Scan-PZModPerformance.sh
@@ -90,7 +90,8 @@ PZ-Mod-Performance-Suite features 8 selectable operations to fit your workflow:
 * **📐 Deterministic Continuous Frame Tax Formula Breakdown (v2.11.0):** Transparently exposes the arithmetic constituents of persistent CPU tick tax across every active mod (`Hooks + World Queries + Container Rebuilds + UI Polling + JNI Calls`). Eliminates confusion between static architectural costing and fluctuating runtime profiler sampling, displaying itemized costs in mod detail cards and top CPU tax lists.
 * **🏷️ Explicit Loop Ownership Attribution (v2.11.0):** Annotates the global active per-frame loop counter directly with the exact owning mods (e.g. `5 permanent hooks [Push Vehicle (3), Realistic Dashboard (1), Traits As Skills (1)]`), ensuring mod authors and users immediately see which specific mods in the pack own unthrottled tick loops.
 * **🚶 Movement-Gated vs. Stationary-Gated Trigger Detection (v2.11.0):** Deeply inspects container rebuilds and heavy logic for standing-still state guards (`not player:isPlayerMoving()`, `not isMoving()`). If guarded, automatically reclassifies the trigger scenario to `Situational: When Standing Still / Stationary (Container Rebuild — Zero Movement Hitch)` and drops the spike rating from Moderate to Low.
-* **🔘 Opt-In Feature & Hotkey-Toggled Mode Tagging (v2.11.0):** Detects whether heavy logic is wrapped in opt-in state checks (`isActive()`, `isEnabled`, `toggleState`, keybind toggles). Prefixes scenarios with `Opt-In Hotkey Mode:`, clearly signaling to players that the hitch only occurs when that specific feature is enabled.
+* **🔘 Named Opt-In Feature & Hotkey-Toggled Mode Tagging (v2.11.1):** Automatically identifies the exact opt-in mode name (e.g. `Opt-In [All-Containers Mode]: Moving Near Containers (Backpack Rebuild - Unconstrained Movement Hitch)`), clearly signaling to players and mod authors which specific keybind or toggle in the mod settings produces the hitch.
+* **🚀 Direct Single-File Release Downloads (v2.11.1):** Zero zip extraction friction! Windows users download `Scan-PZModPerformance.bat` directly as a standalone executable, and Linux/macOS users download `Scan-PZModPerformance.sh` directly.
 * **🐧 Linux & 🍎 macOS Universal Compatibility (v2.10.0):** Full cross-platform support with `Scan-PZModPerformance.sh` featuring a 1-click zero-root portable PowerShell Core installer for SteamOS / Steam Deck, Ubuntu, Debian, Fedora, Arch, and macOS.
 
 * **🎯 Granular Situational Trigger Taxonomy & Attribution Precision (v2.8.0):** Replaces generic catch-all "Periodic Timer" labels with 10+ distinct real-world gameplay trigger scenarios. Distinguishes in-vehicle dashboards (`Active: While Inside Vehicle / Driving`), locomotion gear noise (`Situational: While Jogging / Moving on Foot (Gear Audio)`), vehicle shoving (`Situational: While Pushing a Vehicle`), lockpicking minigames (`Situational: While Lockpicking / Mini-Game Active`), post-action tool stowing (`Situational: After Completing Timed Actions (Auto-Stow)`), building cursors (`Situational: While Building / Placing Furniture`), threat line-of-sight checks (`Situational: Threat Proximity & Hostile Alerts`), combat XP gains (`Situational: Combat & XP Gain / Zombie Kills`), gamepad joystick deadzones (`Situational: While Using Controller / Gamepad`), second-screen telemetry (`Situational: Second-Screen Browser Telemetry (~Every 500ms)`), and character creation setup (`Situational: Character Creation & Join (One-Time Setup)`). Corrects false-positive combat attribution on diagnostic logging tools like `ZombieBuddy` down to `< 1 ms [Imperceptible]` passive utility.
