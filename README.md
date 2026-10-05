@@ -75,6 +75,7 @@ PZ-Mod-Performance-Suite features 8 selectable operations to fit your workflow:
 
 ## 🔍 Key Features
 
+* **🎯 Granular Situational Trigger Taxonomy & Attribution Precision (v2.8.0):** Replaces generic catch-all "Periodic Timer" labels with 10+ distinct real-world gameplay trigger scenarios. Distinguishes in-vehicle dashboards (`Active: While Inside Vehicle / Driving`), locomotion gear noise (`Situational: While Jogging / Moving on Foot (Gear Audio)`), vehicle shoving (`Situational: While Pushing a Vehicle`), lockpicking minigames (`Situational: While Lockpicking / Mini-Game Active`), post-action tool stowing (`Situational: After Completing Timed Actions (Auto-Stow)`), building cursors (`Situational: While Building / Placing Furniture`), threat line-of-sight checks (`Situational: Threat Proximity & Hostile Alerts`), combat XP gains (`Situational: Combat & XP Gain / Zombie Kills`), gamepad joystick deadzones (`Situational: While Using Controller / Gamepad`), second-screen telemetry (`Situational: Second-Screen Browser Telemetry (~Every 500ms)`), and character creation setup (`Situational: Character Creation & Join (One-Time Setup)`). Corrects false-positive combat attribution on diagnostic logging tools like `ZombieBuddy` down to `< 1 ms [Imperceptible]` passive utility.
 * **🎮 State-Gated vs. Continuous Hook Classification (v2.7.1):** Deeply parses Lua execution semantics (`OnTick`, `OnPlayerUpdate`) to distinguish true unconstrained per-frame loops from state-gated hooks that exit immediately via early return when idle (e.g., `if not DragAndDrop.hasPendingCancel then return end`, `if not player:getVehicle() then return end`). Accurately categorizes UI mods (such as `Equipment UI`, `CleanHotBar`, `Neat Crafting`) as `Situational: While Menu / UI Is Open` (+0.02 ms/frame idle) and vehicle mods as `Active: While Driving / Vehicle Streaming`, ensuring mods are never falsely accused of continuous frame drag when menus are closed or when walking on foot.
 * **📋 Full Stutter & Lag Spike Impact Roster (v2.7.0):** Clean, 1-line tabular roster displaying every active mod with predicted frame spike bounds, severity status, and exact gameplay trigger events. Replaces visual clutter with unified per-row severity colors (Red for CRITICAL, Yellow for HIGH, DarkYellow for MODERATE, Cyan for LOW, and DarkGray for NEGLIGIBLE). Sorted by impact severity and latency so passive mods always rest at the bottom.
 * **🎯 Top 10 Correlated Spike Culprits with Worthiness Filter (v2.7.0):** Deeply correlates recorded engine slow frames across up to the Top 10 highest-impact mods. Implements a strict worthiness filter (`Test-IsSpikeWorthy`) that rejects harmless cosmetic packs and passive `< 1 ms` mods, completely eliminating blind padding.
@@ -147,7 +148,7 @@ PZ-Mod-Performance-Suite features 8 selectable operations to fit your workflow:
 ```text
 
 =================================================================
-   PROJECT ZOMBOID MOD PERFORMANCE & OPTIMIZATION SUITE v2.7.1  
+   PROJECT ZOMBOID MOD PERFORMANCE & OPTIMIZATION SUITE v2.8.0  
          Created by @KodeMannn with the help of Gemini          
 =================================================================
 
@@ -174,16 +175,16 @@ PZ-Mod-Performance-Suite features 8 selectable operations to fit your workflow:
    -> ATTRIBUTION     : Main thread CPU tick budget overflow from excessive per-frame Lua loops.
    -> ACTIONABLE FIX  : Lower in-game frame rate cap to 120 FPS (Option [5]) or reduce vehicle fleet mods.
    -> TOP CORRELATED SPIKE CULPRITS (Up to Top 10 High/Moderate Impact):
-      [01] Project Viewpoint QOL            | Pred: ~10-35 ms [Combat Hitch]     | Horde Proximity & Combat
-      [02] Push Vehicle                     | Pred: ~5-15 ms [Minor Blip]        | Active: While Driving / Vehicle Streaming
-      [03] Construction 1P Viewpoint        | Pred: ~5-15 ms [Minor Blip]        | Periodic Timer (~Every 5-10s)
-      [04] Viewpoint Threat Detector        | Pred: ~5-15 ms [Minor Blip]        | Periodic Timer (~Every 5-10s)
-      [05] Tidy Up Meister                  | Pred: ~5-15 ms [Minor Blip]        | Periodic Timer (~Every 5-10s)
-      [06] Project Viewpoint Controller ... | Pred: ~5-15 ms [Minor Blip]        | Periodic Timer (~Every 5-10s)
-      [07] More Damaged Objects             | Pred: ~5-15 ms [Minor Blip]        | Periodic Timer (~Every 5-10s)
-      [08] Traits As Skills                 | Pred: ~5-15 ms [Minor Blip]        | Periodic Timer (~Every 5-10s)
-      [09] CleanHotBar                      | Pred: ~2-8 ms [Frame Delay]        | Situational: While Menu / UI Is Open
-      [10] Equipment UI - [Standalone]      | Pred: ~2-8 ms [Frame Delay]        | Situational: While Menu / UI Is Open
+      [01] 6261 3D models for Viewpoint ... | Pred: ~350-550 ms [Severe Freeze]  | Chunk Border Traversal & High-Speed Driving
+      [02] Project Viewpoint QOL            | Pred: ~10-35 ms [Combat Hitch]     | Horde Proximity & Combat
+      [03] Push Vehicle                     | Pred: ~5-15 ms [Minor Blip]        | Situational: While Pushing a Vehicle
+      [04] Tidy Up Meister                  | Pred: ~5-15 ms [Minor Blip]        | Situational: After Completing Timed Actions (Auto-Stow)
+      [05] Construction 1P Viewpoint        | Pred: ~5-15 ms [Minor Blip]        | Situational: While Building / Placing Furniture
+      [06] Viewpoint Threat Detector        | Pred: ~5-15 ms [Minor Blip]        | Situational: Threat Proximity & Hostile Alerts
+      [07] Realistic Dashboard and Gauges   | Pred: ~5-15 ms [Minor Blip]        | Active: While Inside Vehicle / Driving
+      [08] Dynamic Gear Rattling            | Pred: ~5-15 ms [Minor Blip]        | Situational: While Jogging / Moving on Foot (Gear Audio)
+      [09] Spongie's Character Customisa... | Pred: ~5-15 ms [Minor Blip]        | Situational: Character Creation & Join (One-Time Setup)
+      [10] Neat Lockpicking                 | Pred: ~5-15 ms [Minor Blip]        | Situational: While Lockpicking / Mini-Game Active
  Chunk Cache Hitches  : Up to 173 mesh builds/chunk (Peak rebuild stall: 10.9 ms)
    -> Top 3D Meshes   : 6261 3D models for Viewpoint (10241 world meshes), that DAMN Library (46 world meshes)
  File Override Clashes: 433 detected (431 Safe, 2 High/Moderate Risk)
@@ -209,19 +210,22 @@ PZ-Mod-Performance-Suite features 8 selectable operations to fit your workflow:
  ----- -------------------------------- | ---------------------------------- | -----------------------------------
  [01]  6261 3D models for Viewpoint ... | Pred: ~350-550 ms [Severe Freeze]  | Chunk Border Traversal & High-Speed Driving
  [02]  Project Viewpoint QOL            | Pred: ~10-35 ms [Combat Hitch]     | Horde Proximity & Combat
- [03]  ZombieBuddy                      | Pred: ~10-35 ms [Combat Hitch]     | Horde Proximity & Combat
- [04]  Push Vehicle                     | Pred: ~5-15 ms [Minor Blip]        | Active: While Driving / Vehicle Streaming
- [05]  Tidy Up Meister                  | Pred: ~5-15 ms [Minor Blip]        | Periodic Timer (~Every 5-10s)
- [06]  Construction 1P Viewpoint        | Pred: ~5-15 ms [Minor Blip]        | Periodic Timer (~Every 5-10s)
- [07]  Viewpoint Threat Detector        | Pred: ~5-15 ms [Minor Blip]        | Periodic Timer (~Every 5-10s)
- [08]  '91 Nissan 240SX                 | Pred: ~5-15 ms [Minor Blip]        | Active: While Driving / Vehicle Streaming
- [09]  Realistic Dashboard and Gauges   | Pred: ~5-15 ms [Minor Blip]        | Periodic Timer (~Every 5-10s)
- [10]  Dynamic Gear Rattling            | Pred: ~5-15 ms [Minor Blip]        | Periodic Timer (~Every 5-10s)
+ [03]  Push Vehicle                     | Pred: ~5-15 ms [Minor Blip]        | Situational: While Pushing a Vehicle
+ [04]  Tidy Up Meister                  | Pred: ~5-15 ms [Minor Blip]        | Situational: After Completing Timed Actions (Auto-Stow)
+ [05]  Construction 1P Viewpoint        | Pred: ~5-15 ms [Minor Blip]        | Situational: While Building / Placing Furniture
+ [06]  Viewpoint Threat Detector        | Pred: ~5-15 ms [Minor Blip]        | Situational: Threat Proximity & Hostile Alerts
+ [07]  Realistic Dashboard and Gauges   | Pred: ~5-15 ms [Minor Blip]        | Active: While Inside Vehicle / Driving
+ [08]  Dynamic Gear Rattling            | Pred: ~5-15 ms [Minor Blip]        | Situational: While Jogging / Moving on Foot (Gear Audio)
+ [09]  Spongie's Character Customisa... | Pred: ~5-15 ms [Minor Blip]        | Situational: Character Creation & Join (One-Time Setup)
+ [10]  Neat Lockpicking                 | Pred: ~5-15 ms [Minor Blip]        | Situational: While Lockpicking / Mini-Game Active
+ [11]  Project Viewpoint Controller ... | Pred: ~5-15 ms [Minor Blip]        | Situational: While Using Controller / Gamepad
+ [12]  Traits As Skills                 | Pred: ~5-15 ms [Minor Blip]        | Situational: Combat & XP Gain / Zombie Kills
+ [13]  More Damaged Objects             | Pred: ~5-15 ms [Minor Blip]        | Situational: Damaged Object Sprites & Water Animations
+ [14]  PZ Pulse                         | Pred: ~5-15 ms [Minor Blip]        | Situational: Second-Screen Browser Telemetry (~Every 500ms)
+ [15]  Equipment UI - [Standalone]      | Pred: ~2-8 ms [Frame Delay]        | Situational: While Menu / UI Is Open
+ [16]  CleanHotBar                      | Pred: ~2-8 ms [Frame Delay]        | Situational: While Menu / UI Is Open
  ...
- [16]  Equipment UI - [Standalone]      | Pred: ~2-8 ms [Frame Delay]        | Situational: While Menu / UI Is Open
- [17]  CleanHotBar                      | Pred: ~2-8 ms [Frame Delay]        | Situational: While Menu / UI Is Open
- ...
- [20]  Trailers!                        | Pred: < 1 ms [Imperceptible]       | Active: While Driving / Vehicle Streaming
+ [58]  ZombieBuddy                      | Pred: < 1 ms [Imperceptible]       | None (Passive / Static UI)
 ```
 
 ---

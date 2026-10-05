@@ -1,6 +1,6 @@
 <#
 .SYNOPSIS
-    Project Zomboid Mod Performance & Optimization Suite v2.7.1
+    Project Zomboid Mod Performance & Optimization Suite v2.8.0
 .DESCRIPTION
     Comprehensive diagnostic scanner and optimization toolkit for Project Zomboid (Build 42 & 41).
     Features Precision Slow Frame Anatomy Dissection (Main vs Render Thread, GC pauses vs Chunk Cache),
@@ -533,7 +533,7 @@ function Analyze-ModLuaSemantics([System.IO.FileInfo[]]$luaFiles) {
                 if ($code -match '%\s*\d+|tickCounter|RefreshTick|TimeToRefresh|TicksToComplete|getMultiplier\(\)|frameCounter|interval|throttle|Modulo') {
                     $throttledHooks++
                     $hookBreakdown += "$hookEvent (Throttled)"
-                } elseif ($code -match 'if\s+not\s+[\w\.:]+(\s+then|\s*\n\s*then|\s*\)\s*then)?\s*(\n\s*)?return|if\s+[\w\.:]+\s*==\s*(0|false|nil)\s+then|if\s+not\s+player:isMoving|player:getVehicle\(\)|player\.getVehicle|getVehicle\(\)\s*==\s*nil|isVehicle\s*==\s*false|if\s+not\s+self:isVisible|if\s+not\s+self\.isOpen|if\s+not\s+self\.isCollapsed|if\s+not\s+self\.shown') {
+                } elseif ($code -match 'if\s+not\s+[\w\.:]+(\s+then|\s*\n\s*then|\s*\)\s*then)?\s*(\n\s*)?return|if\s+[\w\.:]+\s*==\s*(0|false|nil)\s+then|if\s+#\w+\s*==\s*0\s+then|if\s+not\s+player:isMoving|isPlayerMoving|isDriving|player:getVehicle\(\)|player\.getVehicle|getVehicle\(\)\s*==\s*nil|isVehicle\s*==\s*false|active\(\)|usablePlayer|C1PVBridge|if\s+not\s+self:isVisible|if\s+not\s+self\.isOpen|if\s+not\s+self\.isCollapsed|if\s+not\s+self\.shown') {
                     $throttledHooks++
                     $hookBreakdown += "$hookEvent (State-Gated)"
                 } else {
@@ -591,11 +591,44 @@ function Get-ModStutterMetrics {
     } elseif ($modId -match "VanillaVehiclesAnimated" -or $worldMeshCount -gt 200) {
         $spikeMs = "~20-60 ms [Micro-Stutter]"
         $spikeSeverity = "MODERATE"
-    } elseif ($inHookWorldQueries -ge 5 -or $modId -match "TrueCrawling|Zombie") {
+    } elseif ($inHookWorldQueries -ge 5 -or $modId -match "TrueCrawling|ZombieDismemberment|ZombieAnimation|ZombieCrawl") {
         $spikeMs = "~10-35 ms [Combat Hitch]"
         $spikeSeverity = "MODERATE"
     } elseif (($modId -match "Equipment|Inventory|Hotbar|Crafting|Menu|Map|Health|DragAndDrop" -or $modName -match "Equipment|Inventory|Hotbar|Crafting|Menu|Map|Health") -and ($permHooks -gt 0 -or $throttledHooks -gt 0 -or $inHookInvQueries -gt 0)) {
         $spikeMs = "~2-8 ms [Frame Delay]"
+        $spikeSeverity = "LOW"
+    } elseif ($modId -match "RealisticDash|YourDash" -or $modName -match "Realistic Dashboard|Gauges") {
+        $spikeMs = "~5-15 ms [Minor Blip]"
+        $spikeSeverity = "LOW"
+    } elseif ($modId -match "PushVehicle" -or $modName -match "Push Vehicle") {
+        $spikeMs = "~5-15 ms [Minor Blip]"
+        $spikeSeverity = "LOW"
+    } elseif ($modId -match "DynamicGearRattling|GearRattling" -or $modName -match "Gear Rattling") {
+        $spikeMs = "~5-15 ms [Minor Blip]"
+        $spikeSeverity = "LOW"
+    } elseif ($modId -match "ALifeThreatAlert|ThreatAlert|ThreatDetector" -or $modName -match "Threat Detector") {
+        $spikeMs = "~5-15 ms [Minor Blip]"
+        $spikeSeverity = "LOW"
+    } elseif ($modId -match "NeatLockpicking|Lockpick" -or $modName -match "Lockpicking") {
+        $spikeMs = "~5-15 ms [Minor Blip]"
+        $spikeSeverity = "LOW"
+    } elseif ($modId -match "Construction1PViewpoint" -or $modName -match "Construction 1P") {
+        $spikeMs = "~5-15 ms [Minor Blip]"
+        $spikeSeverity = "LOW"
+    } elseif ($modId -match "P4TidyUpMeister|TidyUpMeister" -or $modName -match "Tidy Up Meister") {
+        $spikeMs = "~5-15 ms [Minor Blip]"
+        $spikeSeverity = "LOW"
+    } elseif ($modId -match "traitsAsSkills" -or $modName -match "Traits As Skills") {
+        $spikeMs = "~5-15 ms [Minor Blip]"
+        $spikeSeverity = "LOW"
+    } elseif ($modId -match "ControllerSupport|Joypad" -or $modName -match "Controller Support") {
+        $spikeMs = "~5-15 ms [Minor Blip]"
+        $spikeSeverity = "LOW"
+    } elseif ($modId -match "PZ_Pulse|PZPulse" -or $modName -match "PZ Pulse") {
+        $spikeMs = "~5-15 ms [Minor Blip]"
+        $spikeSeverity = "LOW"
+    } elseif ($modId -match "MoreDamagedObjects" -or $modName -match "More Damaged Objects") {
+        $spikeMs = "~5-15 ms [Minor Blip]"
         $spikeSeverity = "LOW"
     } elseif ($throttledHooks -gt 0) {
         $spikeMs = "~5-15 ms [Minor Blip]"
@@ -625,10 +658,34 @@ function Get-ModStutterMetrics {
     $trigger = "None (Passive / Static UI)"
     if ($modId -match "PZVoxelStudioViewpoint" -or $worldMeshCount -ge 1000 -or $textureMB -ge 100) {
         $trigger = "Chunk Border Traversal & High-Speed Driving"
-    } elseif ($inHookWorldQueries -ge 5 -or $modId -match "TrueCrawling|Zombie") {
+    } elseif ($inHookWorldQueries -ge 5 -or $modId -match "TrueCrawling|ZombieDismemberment|ZombieAnimation|ZombieCrawl") {
         $trigger = "Horde Proximity & Combat"
     } elseif ($transHooks -ge 15 -or $modId -match "Journal|Burd") {
         $trigger = "Action: Transcribing / Reading XP"
+    } elseif ($modId -match "RealisticDash|YourDash" -or $modName -match "Realistic Dashboard|Gauges") {
+        $trigger = "Active: While Inside Vehicle / Driving"
+    } elseif ($modId -match "PushVehicle" -or $modName -match "Push Vehicle") {
+        $trigger = "Situational: While Pushing a Vehicle"
+    } elseif ($modId -match "DynamicGearRattling|GearRattling" -or $modName -match "Gear Rattling") {
+        $trigger = "Situational: While Jogging / Moving on Foot (Gear Audio)"
+    } elseif ($modId -match "ALifeThreatAlert|ThreatAlert|ThreatDetector" -or $modName -match "Threat Detector") {
+        $trigger = "Situational: Threat Proximity & Hostile Alerts"
+    } elseif ($modId -match "NeatLockpicking|Lockpick" -or $modName -match "Lockpicking") {
+        $trigger = "Situational: While Lockpicking / Mini-Game Active"
+    } elseif ($modId -match "Construction1PViewpoint" -or $modName -match "Construction 1P") {
+        $trigger = "Situational: While Building / Placing Furniture"
+    } elseif ($modId -match "P4TidyUpMeister|TidyUpMeister" -or $modName -match "Tidy Up Meister") {
+        $trigger = "Situational: After Completing Timed Actions (Auto-Stow)"
+    } elseif ($modId -match "traitsAsSkills" -or $modName -match "Traits As Skills") {
+        $trigger = "Situational: Combat & XP Gain / Zombie Kills"
+    } elseif ($modId -match "ControllerSupport|Joypad" -or $modName -match "Controller Support") {
+        $trigger = "Situational: While Using Controller / Gamepad"
+    } elseif ($modId -match "PZ_Pulse|PZPulse" -or $modName -match "PZ Pulse") {
+        $trigger = "Situational: Second-Screen Browser Telemetry (~Every 500ms)"
+    } elseif ($modId -match "MoreDamagedObjects" -or $modName -match "More Damaged Objects") {
+        $trigger = "Situational: Damaged Object Sprites & Water Animations"
+    } elseif ($modId -match "SPNCC" -or $modName -match "Character Customisation") {
+        $trigger = "Situational: Character Creation & Join (One-Time Setup)"
     } elseif ($modId -match "Equipment|Inventory|Hotbar|Crafting|Menu|Map|Health|DragAndDrop" -or $modName -match "Equipment|Inventory|Hotbar|Crafting|Menu|Map|Health") {
         $trigger = "Situational: While Menu / UI Is Open"
     } elseif ($modId -match "VanillaVehiclesAnimated|Vehicle|jeep|chevy|ford|dodge|nissan|amgeneral|toyota|ferret|oshkosh|corvette|camaro|mustang|volvo|beetle|KI5") {
@@ -675,7 +732,7 @@ function Test-IsSpikeWorthy($mod) {
 # ==============================================================================
 function Invoke-PZScanEngine([string]$CustomServerIni = "", [switch]$LocalWorkshopOnly, [string]$CustomWorkshopPath = "") {
     Write-Host "`n=================================================================" -ForegroundColor Cyan
-    Write-Host "   PROJECT ZOMBOID MOD PERFORMANCE & OPTIMIZATION SUITE v2.7.1  " -ForegroundColor Yellow
+    Write-Host "   PROJECT ZOMBOID MOD PERFORMANCE & OPTIMIZATION SUITE v2.8.0  " -ForegroundColor Yellow
     Write-Host "         Created by @KodeMannn with the help of Gemini          " -ForegroundColor DarkCyan
     Write-Host "=================================================================`n" -ForegroundColor Cyan
 
@@ -1615,7 +1672,7 @@ function Invoke-PZScanEngine([string]$CustomServerIni = "", [switch]$LocalWorksh
     # Generate Markdown Report
     $md = @()
     $md += "# Project Zomboid Mod Performance & Optimization Diagnostic Report"
-    $md += "*Generated: $(Get-Date -Format 'yyyy-MM-dd HH:mm:ss') on $env:COMPUTERNAME by PZ-Mod-Performance-Suite v2.7.1 (Coded with the help of Google Gemini)*"
+    $md += "*Generated: $(Get-Date -Format 'yyyy-MM-dd HH:mm:ss') on $env:COMPUTERNAME by PZ-Mod-Performance-Suite v2.8.0 (Coded with the help of Google Gemini)*"
     $md += ""
     $md += "## Executive Summary"
     $md += "- **Game Version:** $pzVersion"
@@ -1781,7 +1838,7 @@ function Show-PZMainMenu {
     while ($true) {
         Clear-Host
         Write-Host "=================================================================" -ForegroundColor Cyan
-        Write-Host "   PROJECT ZOMBOID MOD PERFORMANCE & OPTIMIZATION SUITE v2.7.1  " -ForegroundColor Yellow
+        Write-Host "   PROJECT ZOMBOID MOD PERFORMANCE & OPTIMIZATION SUITE v2.8.0  " -ForegroundColor Yellow
         Write-Host "         Created by @KodeMannn with the help of Gemini          " -ForegroundColor DarkCyan
         Write-Host "=================================================================" -ForegroundColor Cyan
         Write-Host "  [1] Run Full Performance Diagnostic Scan (Active Save)" -ForegroundColor White
