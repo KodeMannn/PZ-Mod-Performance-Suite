@@ -1,6 +1,6 @@
 <#
 .SYNOPSIS
-    Project Zomboid Mod Performance & Optimization Suite v2.14.0
+    Project Zomboid Mod Performance & Optimization Suite v2.14.1
 .DESCRIPTION
     Comprehensive diagnostic scanner and optimization toolkit for Project Zomboid (Build 42 & 41).
     Features Precision Slow Frame Anatomy Dissection (Main vs Render Thread, GC pauses vs Chunk Cache),
@@ -913,9 +913,48 @@ function Get-ModStutterMetrics {
     } elseif ($modId -match "MoreDamagedObjects" -or $modName -match "More Damaged Objects") {
         $spikeMs = "~5-15 ms [Minor Blip]"
         $spikeSeverity = "LOW"
-    } elseif ($hasJavaJar) {
-        $spikeMs = "~10-35 ms [JVM Hook / Render Pass]"
+    } elseif ($modId -eq "ZombieBuddy" -or $modName -eq "ZombieBuddy") {
+        $spikeMs = "< 1 ms [Imperceptible]"
+        $spikeSeverity = "NEGLIGIBLE"
+    } elseif ($modId -match "ViewpointTrueWeathers$" -or $modName -match "True Weathers & Lighting") {
+        $spikeMs = "~10-30 ms [Weather Shader / Lighting Pass]"
         $spikeSeverity = "MODERATE"
+    } elseif ($modId -match "NearVegetation|TREE in 3D" -or $modName -match "TREE in 3D") {
+        $spikeMs = "~15-35 ms [3D Tree Mesh Frustum Render]"
+        $spikeSeverity = "MODERATE"
+    } elseif ($modId -eq "Viewpoint" -or $modName -eq "Viewpoint") {
+        $spikeMs = "~10-25 ms [1P Render Pass & Camera Transform]"
+        $spikeSeverity = "MODERATE"
+    } elseif ($modId -match "ViewpointTrueBallistics" -or $modName -match "True Ballistics") {
+        $spikeMs = "~10-25 ms [Ballistics Raycast / Trajectory Calc]"
+        $spikeSeverity = "MODERATE"
+    } elseif ($modId -match "ViewpointBloodFX" -or $modName -match "Blood FX for Viewpoint") {
+        $spikeMs = "~10-25 ms [Blood Particle & Lens Splatter]"
+        $spikeSeverity = "MODERATE"
+    } elseif ($modId -match "ViewpointAdvancedThrowables" -or $modName -match "Advanced Throwables") {
+        $spikeMs = "~5-15 ms [Action Blip: Throwable Physics]"
+        $spikeSeverity = "LOW"
+    } elseif ($modId -match "ProjectViewpointADS" -or $modName -match "Recoil & ADS") {
+        $spikeMs = "~5-15 ms [Action Blip: Recoil & ADS Calc]"
+        $spikeSeverity = "LOW"
+    } elseif ($modId -match "ViewpointAdvancedMovement" -or $modName -match "Advanced Movement") {
+        $spikeMs = "~5-15 ms [Action Blip: Movement State Calc]"
+        $spikeSeverity = "LOW"
+    } elseif ($modId -match "ViewpointTrueWeathersGameplay" -or $modName -match "True Weathers - Gameplay") {
+        $spikeMs = "~5-15 ms [Weather Sensory Calculation]"
+        $spikeSeverity = "LOW"
+    } elseif ($modId -match "ViewpointDoor" -or $modName -match "Door Fix") {
+        $spikeMs = "~2-8 ms [Door Model Lighting Adjustment]"
+        $spikeSeverity = "LOW"
+    } elseif ($modId -match "ViewpointSurface" -or $modName -match "Surface Fix") {
+        $spikeMs = "~2-8 ms [Surface Mesh Clip Pass]"
+        $spikeSeverity = "LOW"
+    } elseif ($modId -match "ViewpointFences3D" -or $modName -match "3D Fences") {
+        $spikeMs = "~2-8 ms [Fence Mesh Frustum Pass]"
+        $spikeSeverity = "LOW"
+    } elseif ($hasJavaJar) {
+        $spikeMs = "~5-15 ms [Java Engine Extension]"
+        $spikeSeverity = "LOW"
     } elseif ($throttledHooks -gt 0) {
         $spikeMs = "~5-15 ms [Minor Blip]"
         $spikeSeverity = "LOW"
@@ -926,7 +965,49 @@ function Get-ModStutterMetrics {
 
     # 2. Continuous & Peak Frame Time Tax (+X.XX ms / frame)
     # Queries in permanent per-frame loops run continuously; queries in throttled hooks run periodically
-    $javaActiveTax = if ($hasJavaJar) { 0.75 } else { 0.0 }
+    $javaActiveTax = 0.0
+    $javaIdleTax = 0.0
+    if ($modId -eq "ZombieBuddy" -or $modName -eq "ZombieBuddy") {
+        $javaActiveTax = 0.0
+        $javaIdleTax = 0.0
+    } elseif ($modId -match "ViewpointTrueWeathers$" -or $modName -match "True Weathers & Lighting") {
+        $javaActiveTax = 1.20
+        $javaIdleTax = 0.05
+    } elseif ($modId -match "NearVegetation|TREE in 3D" -or $modName -match "TREE in 3D") {
+        $javaActiveTax = 0.85
+        $javaIdleTax = 0.0
+    } elseif ($modId -eq "Viewpoint" -or $modName -eq "Viewpoint") {
+        $javaActiveTax = 0.75
+        $javaIdleTax = 0.15
+    } elseif ($modId -match "ViewpointTrueBallistics" -or $modName -match "True Ballistics") {
+        $javaActiveTax = 0.75
+        $javaIdleTax = 0.0
+    } elseif ($modId -match "ViewpointBloodFX" -or $modName -match "Blood FX for Viewpoint") {
+        $javaActiveTax = 0.60
+        $javaIdleTax = 0.0
+    } elseif ($modId -match "ViewpointAdvancedThrowables" -or $modName -match "Advanced Throwables") {
+        $javaActiveTax = 0.50
+        $javaIdleTax = 0.0
+    } elseif ($modId -match "ProjectViewpointADS" -or $modName -match "Recoil & ADS") {
+        $javaActiveTax = 0.50
+        $javaIdleTax = 0.0
+    } elseif ($modId -match "ViewpointAdvancedMovement" -or $modName -match "Advanced Movement") {
+        $javaActiveTax = 0.40
+        $javaIdleTax = 0.0
+    } elseif ($modId -match "ViewpointTrueWeathersGameplay" -or $modName -match "True Weathers - Gameplay") {
+        $javaActiveTax = 0.35
+        $javaIdleTax = 0.0
+    } elseif ($modId -match "ViewpointSurface" -or $modName -match "Surface Fix") {
+        $javaActiveTax = 0.25
+        $javaIdleTax = 0.0
+    } elseif ($modId -match "ViewpointDoor" -or $modName -match "Door Fix") {
+        $javaActiveTax = 0.20
+        $javaIdleTax = 0.0
+    } elseif ($hasJavaJar) {
+        $javaActiveTax = 0.50
+        $javaIdleTax = 0.0
+    }
+
     $hookTax = ($permHooks * 0.45) + ($throttledHooks * 0.02)
     $worldTax = if ($permHooks -gt 0) { $inHookWorldQueries * 0.08 } elseif ($throttledHooks -gt 0) { $inHookWorldQueries * 0.015 } else { 0.0 }
     $invTax = if ($permHooks -gt 0) { $inHookInvQueries * 0.04 } elseif ($throttledHooks -gt 0) { $inHookInvQueries * 0.01 } else { 0.0 }
@@ -961,7 +1042,6 @@ function Get-ModStutterMetrics {
     # Idle Baseline Tax:
     # Fixed Java-to-Lua JNI event invocation cost (~0.10 ms per registered hook)
     # Plus continuous background payload for unconstrained pollers
-    $javaIdleTax = if ($hasJavaJar) { 0.25 } else { 0.0 }
     $idleHookDispatch = ($permHooks * 0.10) + ($throttledHooks * 0.005)
     $idlePayloadTax = 0.0
     if ($isContinuousPolling) {
@@ -970,8 +1050,14 @@ function Get-ModStutterMetrics {
     }
     $idleTaxRaw = [math]::Round($idleHookDispatch + $idlePayloadTax + $javaIdleTax, 2)
 
-    $loopNature = if ($hasJavaJar) {
-        "Java Bytecode (JVM)"
+    $loopNature = if ($modId -eq "ZombieBuddy" -or $modName -eq "ZombieBuddy") {
+        "Passive Framework"
+    } elseif ($modId -eq "Viewpoint" -or $modName -eq "Viewpoint") {
+        "1P Render Matrix (JVM)"
+    } elseif ($modId -match "ViewpointTrueWeathers$" -or $modName -match "True Weathers & Lighting") {
+        "Weather Render (JVM)"
+    } elseif ($hasJavaJar) {
+        "Situational (JVM)"
     } elseif ($isContinuousPolling) {
         "Continuous Polling"
     } elseif ($isDormantEarlyExit) {
@@ -1075,8 +1161,34 @@ function Get-ModStutterMetrics {
         $trigger = "Situational: While Sneaking / In Stealth Stance"
     } elseif ($modId -match "VanillaVehiclesAnimated|Vehicle|jeep|chevy|ford|dodge|nissan|amgeneral|toyota|ferret|oshkosh|corvette|camaro|mustang|volvo|beetle|KI5") {
         $trigger = "Active: While Driving / Vehicle Streaming"
+    } elseif ($modId -eq "ZombieBuddy" -or $modName -eq "ZombieBuddy") {
+        $trigger = "Passive: JVM Bytecode Transformer Engine (Launch-Time Injection - Zero Gameplay Tick Tax)"
+    } elseif ($modId -eq "Viewpoint" -or $modName -eq "Viewpoint") {
+        $trigger = "Opt-In [First-Person Mode]: 1P Camera Matrix & In-Engine Render Pass (Active in 1P / Dormant in 3P)"
+    } elseif ($modId -match "ViewpointTrueWeathers$" -or $modName -match "True Weathers & Lighting") {
+        $trigger = "Situational: During Heavy Storms, Fog & Lightning (Dormant in Clear Weather)"
+    } elseif ($modId -match "ViewpointTrueWeathersGameplay" -or $modName -match "True Weathers - Gameplay") {
+        $trigger = "Situational: Storm / Fog Weather Zombie Sensory Modifiers (Dormant in Clear Weather)"
+    } elseif ($modId -match "NearVegetation|TREE in 3D" -or $modName -match "TREE in 3D") {
+        $trigger = "Situational: Near Forests & Dense Vegetation (3D Trees - Dormant in Clear Areas)"
+    } elseif ($modId -match "ViewpointAdvancedThrowables" -or $modName -match "Advanced Throwables") {
+        $trigger = "Situational: While Aiming / Throwing Projectiles (Dormant on Foot)"
+    } elseif ($modId -match "ProjectViewpointADS" -or $modName -match "Recoil & ADS") {
+        $trigger = "Situational: While Aiming Down Sights (ADS) & Firing (Dormant Idle)"
+    } elseif ($modId -match "ViewpointTrueBallistics" -or $modName -match "True Ballistics") {
+        $trigger = "Situational: While Firing Firearms (Projectile Raycasts - Dormant Idle)"
+    } elseif ($modId -match "ViewpointBloodFX" -or $modName -match "Blood FX for Viewpoint") {
+        $trigger = "Situational: Combat Hits & Zombie Damage (Blood FX - Dormant Out of Combat)"
+    } elseif ($modId -match "ViewpointAdvancedMovement" -or $modName -match "Advanced Movement") {
+        $trigger = "Situational: While Leaning, Prone, Crawling or Vaulting (Dormant Walking)"
+    } elseif ($modId -match "ViewpointDoor" -or $modName -match "Door Fix") {
+        $trigger = "Situational: Near Doors & Doorway Transitions (Dormant Away from Doors)"
+    } elseif ($modId -match "ViewpointSurface" -or $modName -match "Surface Fix") {
+        $trigger = "Situational: Indoors & Multi-Story Roof Surfaces (Dormant Outdoors)"
+    } elseif ($modId -match "ViewpointFences3D" -or $modName -match "3D Fences") {
+        $trigger = "Situational: Near 3D Fences (Frustum Render)"
     } elseif ($hasJavaJar) {
-        $trigger = "Active: Native JVM Bytecode Execution (ZombieBuddy Extension)"
+        $trigger = "Situational: Native Java Engine Extension (Dormant Unless Interacting)"
     } elseif ($permHooks -ge 1) {
         $trigger = if ($isContinuousPolling) { "Active: Continuous Engine Hook (Every Single Frame)" } else { "Dormant: Hook Registered (Early Return Unless Active)" }
     } elseif ($throttledHooks -ge 1) {
@@ -1102,6 +1214,8 @@ function Test-IsSpikeWorthy($mod) {
     if ($mod.PotentialSpike -match '< 1 ms|Imperceptible') { return $false }
     if ($mod.SpikeSeverity -eq 'NEGLIGIBLE') { return $false }
     if ($mod.StutterTrigger -eq 'None (Passive / Static UI)') { return $false }
+    if ($mod.LoopNature -eq 'Passive Framework') { return $false }
+    if ($mod.ModId -eq 'ZombieBuddy' -or $mod.ModName -eq 'ZombieBuddy') { return $false }
 
     $hasTax = $false
     if ($mod.FrameTax -match '\+([\d\.]+)\s*ms') {
@@ -1117,7 +1231,7 @@ function Test-IsSpikeWorthy($mod) {
         $mod.WorldMeshCount -ge 200 -or 
         $mod.TextureMB -ge 50 -or 
         $mod.RiskScore -ge 15 -or
-        $mod.LoopNature -match "Java Bytecode") {
+        $mod.LoopNature -match "JVM") {
         return $true
     }
     return $false
@@ -1128,7 +1242,7 @@ function Test-IsSpikeWorthy($mod) {
 # ==============================================================================
 function Invoke-PZScanEngine([string]$CustomServerIni = "", [switch]$LocalWorkshopOnly, [string]$CustomWorkshopPath = "", [string]$CustomLog = "") {
     Write-Host "`n=================================================================" -ForegroundColor Cyan
-    Write-Host "   PROJECT ZOMBOID MOD PERFORMANCE & OPTIMIZATION SUITE v2.14.0 " -ForegroundColor Yellow
+    Write-Host "   PROJECT ZOMBOID MOD PERFORMANCE & OPTIMIZATION SUITE v2.14.1 " -ForegroundColor Yellow
     Write-Host "         Created by @KodeMannn with the help of Gemini          " -ForegroundColor DarkCyan
     Write-Host "=================================================================`n" -ForegroundColor Cyan
 
@@ -1423,14 +1537,25 @@ function Invoke-PZScanEngine([string]$CustomServerIni = "", [switch]$LocalWorksh
             $riskReasons += "Massive 3D model injection ($worldMeshCount models) causing 400-500ms chunk stalls"
         }
         if ($hasJavaJar) {
-            $riskScore += 25
-            if ($modId -match "ZombieBuddy") {
-                $stutterVerdict = "Core Java Bytecode Transformer Engine"
-                $riskReasons += "Core ASM bytecode transformer patching Java classes at runtime ($javaJarNames)"
-            } elseif ($modId -match "Viewpoint|ProjectViewpoint") {
-                $riskReasons += "Native Java engine extension running in JVM via ZombieBuddy ($javaJarNames)"
+            if ($modId -eq "ZombieBuddy" -or $displayName -eq "ZombieBuddy") {
+                $stutterVerdict = "Safe / Passive Framework (Launch-Time JVM Bytecode Transformer)"
+                $riskReasons += "Core ASM bytecode transformer patching Java classes at boot ($javaJarNames) - Zero per-frame tick overhead"
+            } elseif ($modId -eq "Viewpoint" -or $displayName -eq "Viewpoint") {
+                $riskScore += 25
+                $stutterVerdict = "Core 1P Camera Matrix & In-Engine Render Engine"
+                $riskReasons += "Native Java camera projection matrix running in JVM via ZombieBuddy ($javaJarNames)"
+            } elseif ($modId -match "ViewpointTrueWeathers$" -or $displayName -match "True Weathers & Lighting") {
+                $riskScore += 25
+                $stutterVerdict = "Volumetric Weather & Cinematic Lighting Engine"
+                $riskReasons += "Native Java weather shaders, volumetric fog, and storm lighting passes ($javaJarNames)"
+            } elseif ($modId -match "NearVegetation|TREE in 3D" -or $displayName -match "TREE in 3D") {
+                $riskScore += 20
+                $stutterVerdict = "Near-Scene 3D Tree Mesh Frustum Engine"
+                $riskReasons += "Dynamic 3D tree mesh injection in near player frustum ($javaJarNames)"
             } else {
-                $riskReasons += "Compiled Java bytecode module injected into JVM ($javaJarNames)"
+                $riskScore += 10
+                $stutterVerdict = "Situational Java Engine Add-on (Dormant Idle)"
+                $riskReasons += "Native Java bytecode module triggered during specific gameplay actions ($javaJarNames)"
             }
         }
         if ($modId -match "ControllerSupport" -or $displayName -match "Controller Support") {
@@ -2323,7 +2448,7 @@ function Invoke-PZScanEngine([string]$CustomServerIni = "", [switch]$LocalWorksh
     $md = @()
     $md += "# Project Zomboid Mod Performance & Optimization Diagnostic Report"
     $hostName = if ($env:COMPUTERNAME) { $env:COMPUTERNAME } elseif ($env:HOSTNAME) { $env:HOSTNAME } else { [System.Net.Dns]::GetHostName() }
-    $md += "*Generated: $(Get-Date -Format 'yyyy-MM-dd HH:mm:ss') on $hostName by PZ-Mod-Performance-Suite v2.14.0 (Coded with the help of Google Gemini)*"
+    $md += "*Generated: $(Get-Date -Format 'yyyy-MM-dd HH:mm:ss') on $hostName by PZ-Mod-Performance-Suite v2.14.1 (Coded with the help of Google Gemini)*"
     $md += ""
     $md += "## Executive Summary"
     $md += "- **Game Version:** $pzVersion"
@@ -2531,7 +2656,7 @@ function Show-PZMainMenu {
     while ($true) {
         Clear-Host
         Write-Host "=================================================================" -ForegroundColor Cyan
-        Write-Host "   PROJECT ZOMBOID MOD PERFORMANCE & OPTIMIZATION SUITE v2.14.0 " -ForegroundColor Yellow
+        Write-Host "   PROJECT ZOMBOID MOD PERFORMANCE & OPTIMIZATION SUITE v2.14.1 " -ForegroundColor Yellow
         Write-Host "         Created by @KodeMannn with the help of Gemini          " -ForegroundColor DarkCyan
         Write-Host "=================================================================" -ForegroundColor Cyan
         Write-Host "  [1] Run Full Performance Diagnostic Scan (Active Save)" -ForegroundColor White
