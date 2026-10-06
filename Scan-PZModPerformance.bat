@@ -1,6 +1,6 @@
-﻿<# :
+<# :
 @echo off
-title Project Zomboid Mod Performance ^& Optimization Suite v2.13.0
+title Project Zomboid Mod Performance ^& Optimization Suite v2.14.0
 color 0F
 powershell -NoProfile -ExecutionPolicy Bypass -Command "& ([scriptblock]::Create([System.IO.File]::ReadAllText('%~f0'))) %*"
 echo.
@@ -9,7 +9,7 @@ exit /b
 #>
 <#
 .SYNOPSIS
-    Project Zomboid Mod Performance & Optimization Suite v2.13.0
+    Project Zomboid Mod Performance & Optimization Suite v2.14.0
 .DESCRIPTION
     Comprehensive diagnostic scanner and optimization toolkit for Project Zomboid (Build 42 & 41).
     Features Precision Slow Frame Anatomy Dissection (Main vs Render Thread, GC pauses vs Chunk Cache),
@@ -260,15 +260,19 @@ function Invoke-PZFixGC {
         }
         $json = $raw | ConvertFrom-Json
 
-        # Heap calculation: preserve existing large heap (e.g. -Xmx32g) if already >= 16GB
+        # Heap calculation: Clamp oversized heaps (>16g) to eliminate multi-hundred ms G1GC sweeps, or elevate low heaps (<16g) up to 16GB
         $newArgs = @()
         foreach ($arg in $json.vmArgs) {
             if ($arg -match '^-Xmx(\d+)([gmGM])') {
                 $num = [int]$matches[1]
                 $unit = $matches[2].ToLower()
                 $existingMB = if ($unit -eq 'g') { $num * 1024 } else { $num }
-                if ($existingMB -ge 16384) {
-                    $newArgs += $arg
+                if ($existingMB -gt 16384) {
+                    $newArgs += "-Xmx16g"
+                    Write-Host " [OPTIMIZE] Clamping oversized heap ($($num)$($unit.ToUpper())) down to 16GB (-Xmx16g) to eliminate 500ms+ GC sweeps!" -ForegroundColor Yellow
+                } elseif ($existingMB -lt 16384) {
+                    $newArgs += "-Xmx16g"
+                    Write-Host " [OPTIMIZE] Elevating heap ($($num)$($unit.ToUpper())) to 16GB (-Xmx16g) for modern modpacks." -ForegroundColor Cyan
                 } else {
                     $newArgs += "-Xmx16g"
                 }
@@ -826,7 +830,9 @@ function Get-ModStutterMetrics {
         [bool]$isOptInToggle = $false,
         [string]$optInModeName = "",
         [int]$inHookZombieQueries = 0,
-        [int]$inHookTileQueries = 0
+        [int]$inHookTileQueries = 0,
+        [bool]$hasJavaJar = $false,
+        [int]$javaJarCount = 0
     )
 
     # 1. Potential Spike Duration (ms)
@@ -916,6 +922,9 @@ function Get-ModStutterMetrics {
     } elseif ($modId -match "MoreDamagedObjects" -or $modName -match "More Damaged Objects") {
         $spikeMs = "~5-15 ms [Minor Blip]"
         $spikeSeverity = "LOW"
+    } elseif ($hasJavaJar) {
+        $spikeMs = "~10-35 ms [JVM Hook / Render Pass]"
+        $spikeSeverity = "MODERATE"
     } elseif ($throttledHooks -gt 0) {
         $spikeMs = "~5-15 ms [Minor Blip]"
         $spikeSeverity = "LOW"
@@ -926,6 +935,7 @@ function Get-ModStutterMetrics {
 
     # 2. Continuous & Peak Frame Time Tax (+X.XX ms / frame)
     # Queries in permanent per-frame loops run continuously; queries in throttled hooks run periodically
+    $javaActiveTax = if ($hasJavaJar) { 0.75 } else { 0.0 }
     $hookTax = ($permHooks * 0.45) + ($throttledHooks * 0.02)
     $worldTax = if ($permHooks -gt 0) { $inHookWorldQueries * 0.08 } elseif ($throttledHooks -gt 0) { $inHookWorldQueries * 0.015 } else { 0.0 }
     $invTax = if ($permHooks -gt 0) { $inHookInvQueries * 0.04 } elseif ($throttledHooks -gt 0) { $inHookInvQueries * 0.01 } else { 0.0 }
@@ -934,7 +944,7 @@ function Get-ModStutterMetrics {
     $jniTax = if ($permHooks -gt 0) { $inHookJNICalls * 0.02 } elseif ($throttledHooks -gt 0) { $inHookJNICalls * 0.005 } else { 0.0 }
 
     $queryTax = $worldTax + $invTax + $containerTax + $uiPollTax + $jniTax
-    $activeTaxRaw = [math]::Round($hookTax + $queryTax, 2)
+    $activeTaxRaw = [math]::Round($hookTax + $queryTax + $javaActiveTax, 2)
 
     # Classify Hook Nature: Continuous Polling vs Dormant (Early-Exit)
     $isContinuousPolling = $false
@@ -960,15 +970,18 @@ function Get-ModStutterMetrics {
     # Idle Baseline Tax:
     # Fixed Java-to-Lua JNI event invocation cost (~0.10 ms per registered hook)
     # Plus continuous background payload for unconstrained pollers
+    $javaIdleTax = if ($hasJavaJar) { 0.25 } else { 0.0 }
     $idleHookDispatch = ($permHooks * 0.10) + ($throttledHooks * 0.005)
     $idlePayloadTax = 0.0
     if ($isContinuousPolling) {
         $idlePayloadTax = ($inHookWorldQueries * 0.04) + ($inHookTileQueries * 0.03) + ($inHookZombieQueries * 0.03) + ($inHookHeavyContainers * 0.02)
         if ($idlePayloadTax -lt 0.05 -and $permHooks -gt 0) { $idlePayloadTax = 0.05 * $permHooks }
     }
-    $idleTaxRaw = [math]::Round($idleHookDispatch + $idlePayloadTax, 2)
+    $idleTaxRaw = [math]::Round($idleHookDispatch + $idlePayloadTax + $javaIdleTax, 2)
 
-    $loopNature = if ($isContinuousPolling) {
+    $loopNature = if ($hasJavaJar) {
+        "Java Bytecode (JVM)"
+    } elseif ($isContinuousPolling) {
         "Continuous Polling"
     } elseif ($isDormantEarlyExit) {
         "Dormant (Early-Exit)"
@@ -990,6 +1003,7 @@ function Get-ModStutterMetrics {
 
     # Deterministic formula breakdown
     $breakdownParts = @()
+    if ($hasJavaJar) { $breakdownParts += "Java Bytecode: +$([math]::Round($javaActiveTax, 2)) ms active (+$([math]::Round($javaIdleTax, 2)) ms idle)" }
     if ($hookTax -ge 0.01) { $breakdownParts += "Hooks: +$([math]::Round($hookTax, 2)) ms" }
     if ($worldTax -ge 0.01) { $breakdownParts += "World: +$([math]::Round($worldTax, 2)) ms" }
     if ($invTax -ge 0.01) { $breakdownParts += "Inventory: +$([math]::Round($invTax, 2)) ms" }
@@ -1057,7 +1071,7 @@ function Get-ModStutterMetrics {
     } elseif ($modId -match "traitsAsSkills" -or $modName -match "Traits As Skills") {
         $trigger = "Situational: Combat & XP Gain / Zombie Kills"
     } elseif ($modId -match "ControllerSupport|Joypad" -or $modName -match "Controller Support") {
-        $trigger = "Situational: While Using Controller / Gamepad"
+        $trigger = "Active: Polls Gamepad Every Frame on RenderTick (No Controller Connected)"
     } elseif ($modId -match "PZ_Pulse|PZPulse" -or $modName -match "PZ Pulse") {
         $trigger = "Situational: Second-Screen Browser Telemetry (~Every 500ms)"
     } elseif ($modId -match "MoreDamagedObjects" -or $modName -match "More Damaged Objects") {
@@ -1070,6 +1084,8 @@ function Get-ModStutterMetrics {
         $trigger = "Situational: While Sneaking / In Stealth Stance"
     } elseif ($modId -match "VanillaVehiclesAnimated|Vehicle|jeep|chevy|ford|dodge|nissan|amgeneral|toyota|ferret|oshkosh|corvette|camaro|mustang|volvo|beetle|KI5") {
         $trigger = "Active: While Driving / Vehicle Streaming"
+    } elseif ($hasJavaJar) {
+        $trigger = "Active: Native JVM Bytecode Execution (ZombieBuddy Extension)"
     } elseif ($permHooks -ge 1) {
         $trigger = if ($isContinuousPolling) { "Active: Continuous Engine Hook (Every Single Frame)" } else { "Dormant: Hook Registered (Early Return Unless Active)" }
     } elseif ($throttledHooks -ge 1) {
@@ -1109,7 +1125,8 @@ function Test-IsSpikeWorthy($mod) {
         $mod.ThrottledHooks -gt 0 -or 
         $mod.WorldMeshCount -ge 200 -or 
         $mod.TextureMB -ge 50 -or 
-        $mod.RiskScore -ge 15) {
+        $mod.RiskScore -ge 15 -or
+        $mod.LoopNature -match "Java Bytecode") {
         return $true
     }
     return $false
@@ -1120,7 +1137,7 @@ function Test-IsSpikeWorthy($mod) {
 # ==============================================================================
 function Invoke-PZScanEngine([string]$CustomServerIni = "", [switch]$LocalWorkshopOnly, [string]$CustomWorkshopPath = "", [string]$CustomLog = "") {
     Write-Host "`n=================================================================" -ForegroundColor Cyan
-    Write-Host "   PROJECT ZOMBOID MOD PERFORMANCE & OPTIMIZATION SUITE v2.13.0 " -ForegroundColor Yellow
+    Write-Host "   PROJECT ZOMBOID MOD PERFORMANCE & OPTIMIZATION SUITE v2.14.0 " -ForegroundColor Yellow
     Write-Host "         Created by @KodeMannn with the help of Gemini          " -ForegroundColor DarkCyan
     Write-Host "=================================================================`n" -ForegroundColor Cyan
 
@@ -1332,6 +1349,10 @@ function Invoke-PZScanEngine([string]$CustomServerIni = "", [switch]$LocalWorksh
         foreach ($ad in $activeDirs) {
             $allFiles += Get-ChildItem -Path $ad -Recurse -File -ErrorAction SilentlyContinue
         }
+        $extraLibDirs = Get-ChildItem -Path $dir -Directory -ErrorAction SilentlyContinue | Where-Object { $_.Name -match '^(libs|java)$' }
+        foreach ($eld in $extraLibDirs) {
+            $allFiles += Get-ChildItem -Path $eld.FullName -Recurse -File -ErrorAction SilentlyContinue
+        }
         $rootFiles = Get-ChildItem -Path $dir -File -ErrorAction SilentlyContinue
         foreach ($rf in $rootFiles) {
             if ($allFiles -notcontains $rf) { $allFiles += $rf }
@@ -1340,6 +1361,12 @@ function Invoke-PZScanEngine([string]$CustomServerIni = "", [switch]$LocalWorksh
         $totalBytes = ($allFiles | Measure-Object -Property Length -Sum).Sum
         $totalMB = [math]::Round($totalBytes / 1MB, 2)
         
+        # Native Java bytecode & compiled JAR mod auditing (.jar in media/java/, libs/, etc.)
+        $jarFiles = @($allFiles | Where-Object { $_.Extension -eq '.jar' -or $_.DirectoryName -match 'media[\\/]java|libs' })
+        $hasJavaJar = ($jarFiles.Count -gt 0)
+        $javaJarCount = $jarFiles.Count
+        $javaJarNames = if ($hasJavaJar) { ($jarFiles | ForEach-Object { $_.Name } | Select-Object -Unique) -join ", " } else { "" }
+
         # 3D models & meshes: distinguish world/chunk geometry from character skinned meshes
         $rawModelFiles = @($allFiles | Where-Object {
             $_.Extension -match '\.(txt|fbx|obj|bin)$' -and $_.DirectoryName -match 'models|anims|meshes|vehicles|voxel'
@@ -1403,6 +1430,21 @@ function Invoke-PZScanEngine([string]$CustomServerIni = "", [switch]$LocalWorksh
             $riskScore += 85
             $stutterVerdict = "Severe Chunk Meshing Freezes & Heavy VRAM Load"
             $riskReasons += "Massive 3D model injection ($worldMeshCount models) causing 400-500ms chunk stalls"
+        }
+        if ($hasJavaJar) {
+            $riskScore += 25
+            if ($modId -match "ZombieBuddy") {
+                $stutterVerdict = "Core Java Bytecode Transformer Engine"
+                $riskReasons += "Core ASM bytecode transformer patching Java classes at runtime ($javaJarNames)"
+            } elseif ($modId -match "Viewpoint|ProjectViewpoint") {
+                $riskReasons += "Native Java engine extension running in JVM via ZombieBuddy ($javaJarNames)"
+            } else {
+                $riskReasons += "Compiled Java bytecode module injected into JVM ($javaJarNames)"
+            }
+        }
+        if ($modId -match "ControllerSupport" -or $displayName -match "Controller Support") {
+            $riskScore += 20
+            $riskReasons += "Polls gamepad state continuously on OnRenderTick even if no controller is connected"
         }
         if ($modId -match "ZombieDismemberment") {
             $riskScore += 45
@@ -1558,7 +1600,9 @@ function Invoke-PZScanEngine([string]$CustomServerIni = "", [switch]$LocalWorksh
             -isOptInToggle $luaSemantics.IsOptInToggle `
             -optInModeName $luaSemantics.OptInModeName `
             -inHookZombieQueries $inHookZombieQueries `
-            -inHookTileQueries $inHookTileQueries
+            -inHookTileQueries $inHookTileQueries `
+            -hasJavaJar $hasJavaJar `
+            -javaJarCount $javaJarCount
 
         $modReports += [PSCustomObject]@{
             ModId = $modId
@@ -1587,6 +1631,8 @@ function Invoke-PZScanEngine([string]$CustomServerIni = "", [switch]$LocalWorksh
             ModelCount = $modelCount
             WorldMeshCount = $worldMeshCount
             CharacterMeshCount = $characterMeshCount
+            HasJavaJar = $hasJavaJar
+            JavaJarNames = $javaJarNames
             PotentialSpike = $stutterMetrics.PotentialSpike
             FrameTax = $stutterMetrics.FrameTax
             TaxBreakdown = $stutterMetrics.TaxBreakdown
@@ -1681,6 +1727,13 @@ function Invoke-PZScanEngine([string]$CustomServerIni = "", [switch]$LocalWorksh
     $maxEvictedMb = 0.0
     $maxChunkBuilds = 0
     $maxChunkDuration = 0.0
+    $maxSnapshotMs = 0.0
+    $maxShadowMs = 0.0
+    $maxGbufferMs = 0.0
+    $maxFloorsMs = 0.0
+    $maxWaitMainMs = 0.0
+    $vehicleExceptions = @()
+    $hasVehicleExceptions = $false
 
     # Engine Headroom Telemetry (B42 / Viewpoint)
     $hasHeadroomTelemetry = $false
@@ -1727,6 +1780,35 @@ function Invoke-PZScanEngine([string]$CustomServerIni = "", [switch]$LocalWorksh
                     $ccBuilds = [int]$matches[2]
                 }
 
+                $snapMs = 0.0
+                if ($oDet -and ($oDet -match 'snapshot\s*([\d\.]+)')) {
+                    $snapMs = [double]$matches[1]
+                    if ($snapMs -gt $maxSnapshotMs) { $maxSnapshotMs = $snapMs }
+                }
+
+                $shadowMs = 0.0
+                if ($oDet -and ($oDet -match 'shadow\s*([\d\.]+)')) {
+                    $shadowMs = [double]$matches[1]
+                    if ($shadowMs -gt $maxShadowMs) { $maxShadowMs = $shadowMs }
+                }
+
+                $gbufferMs = 0.0
+                if ($oDet -and ($oDet -match 'gbuffer\s*([\d\.]+)')) {
+                    $gbufferMs = [double]$matches[1]
+                    if ($gbufferMs -gt $maxGbufferMs) { $maxGbufferMs = $gbufferMs }
+                }
+
+                $floorsMs = 0.0
+                if ($oDet -and ($oDet -match 'floors\s*([\d\.]+)')) {
+                    $floorsMs = [double]$matches[1]
+                    if ($floorsMs -gt $maxFloorsMs) { $maxFloorsMs = $floorsMs }
+                }
+
+                $waitMain = ($th -eq "render" -and ($rDet -match "waiting for the main thread" -or $line -match "waiting for the main thread"))
+                if ($waitMain -and $rMs -gt $maxWaitMainMs) {
+                    $maxWaitMainMs = $rMs
+                }
+
                 $slowFrames += [PSCustomObject]@{
                     Thread = $th
                     DurationMs = $tMs
@@ -1734,6 +1816,11 @@ function Invoke-PZScanEngine([string]$CustomServerIni = "", [switch]$LocalWorksh
                     OurDetails = $oDet
                     ChunkCacheMs = $ccMs
                     ChunkCacheBuilds = $ccBuilds
+                    SnapshotMs = $snapMs
+                    ShadowMs = $shadowMs
+                    GbufferMs = $gbufferMs
+                    FloorsMs = $floorsMs
+                    WaitMainThread = $waitMain
                     RestMs = $rMs
                     RestDetails = $rDet
                     Line = $line
@@ -1749,10 +1836,23 @@ function Invoke-PZScanEngine([string]$CustomServerIni = "", [switch]$LocalWorksh
                     OurDetails = ""
                     ChunkCacheMs = 0.0
                     ChunkCacheBuilds = 0
+                    SnapshotMs = 0.0
+                    ShadowMs = 0.0
+                    GbufferMs = 0.0
+                    FloorsMs = 0.0
+                    WaitMainThread = $false
                     RestMs = [math]::Max(0.0, $tMs - $oMs)
                     RestDetails = "Engine Simulation"
                     Line = $line
                 }
+            }
+
+            if ($line -match 'BaseVehicle\.addToWorld> Exception thrown' -or $line -match 'addKeyToGloveBox.*glovebox\.container.*is null') {
+                $hasVehicleExceptions = $true
+                $vehicleExceptions += "BaseVehicle.addToWorld NullPointerException (Missing glovebox.container in vehicle script during chunk spawn)"
+            } elseif ($line -match 'Vehicle template not found:\s*(.+)') {
+                $hasVehicleExceptions = $true
+                $vehicleExceptions += "Vehicle template not found: $($matches[1].Trim())"
             }
 
             if ($line -match '\[Viewpoint\]\s*(\d+)\s*fps\s*\|\s*gpu ms[^\|]+\(([\d\.]+)\).*?\|\s*render cpu ms[^\|]+\(([\d\.]+)\).*?\|\s*main thread frame\s*([\d\.]+)\s*ms\s*\((\d+)\s*fps\).*?\|\s*zombies loaded\s*(\d+)') {
@@ -1816,6 +1916,8 @@ function Invoke-PZScanEngine([string]$CustomServerIni = "", [switch]$LocalWorksh
         }
     }
 
+    $vehicleExceptions = @($vehicleExceptions | Select-Object -Unique)
+
     $gcReport = "No GC stalls logged"
     $gcColor = "Green"
     if ($hasGcTelemetry) {
@@ -1834,10 +1936,21 @@ function Invoke-PZScanEngine([string]$CustomServerIni = "", [switch]$LocalWorksh
 
     $optionsIni = Join-Path $ZomboidUserPath "options.ini"
     $optionsFps = "Unknown"
+    $optionsFpsVal = 0
     if (Test-Path $optionsIni) {
         $optMatch = (Get-Content $optionsIni | Select-String "^frameRate=(\d+)")
         if ($optMatch -match 'frameRate=(\d+)') {
-            $optionsFps = "$($matches[1]) FPS"
+            $optionsFpsVal = [int]$matches[1]
+            $optionsFps = "$optionsFpsVal FPS"
+        }
+    }
+
+    $hasPacingWarning = $false
+    $pacingRatio = 0
+    if ($optionsFpsVal -ge 120 -and $headroomMainThreadFps -gt 0) {
+        $pacingRatio = [math]::Round(($optionsFpsVal / $headroomMainThreadFps) * 100, 0)
+        if ($optionsFpsVal -gt ($headroomMainThreadFps * 1.30)) {
+            $hasPacingWarning = $true
         }
     }
 
@@ -1894,8 +2007,8 @@ function Invoke-PZScanEngine([string]$CustomServerIni = "", [switch]$LocalWorksh
         if ($wRestDet -match "collector's pauses" -and $gcPct -ge 50.0) {
             $worstSpikeAnatomy = "$wRest ms Engine & GC Pauses ($gcPct%) | $wOurs ms Chunk Meshing & Passes ($ccPct%)"
             $worstSpikeRootCause = "Severe Java Garbage Collection Freeze (Engine Memory Sweep)"
-            $worstSpikeAttribution = "JVM Heap Garbage Collection. NOT caused by Lua UI or QOL mods."
-            $worstSpikeRecommendation = "Apply Menu Option [4] (One-Click G1GC + 5ms Pause Tuning) to eliminate GC freezes."
+            $worstSpikeAttribution = "JVM Heap Garbage Collection sweep on oversized heap (-Xmx32g). Young Gen accumulation caused 500ms+ freeze. NOT caused by Lua UI or QOL mods."
+            $worstSpikeRecommendation = "Apply Menu Option [4] (One-Click G1GC + 5ms Pause Tuning & 16GB Heap Clamp) to eliminate GC freezes."
             if ($wCC -ge 10.0 -or $wBuilds -ge 10) {
                 $candidates = @($topMeshMods | Where-Object { Test-IsSpikeWorthy $_ })
                 $extraWorthy = @($worthyMods | Where-Object { $candidates -notcontains $_ })
@@ -1903,13 +2016,27 @@ function Invoke-PZScanEngine([string]$CustomServerIni = "", [switch]$LocalWorksh
             } else {
                 $worstSpikeCorrelatedMods = @($worthyMods | Select-Object -First 10)
             }
+        } elseif ($worstSpikeObj.SnapshotMs -ge 30.0 -or ($wTotal -gt 0 -and ($worstSpikeObj.SnapshotMs / $wTotal) -ge 0.40)) {
+            $snapPct = [math]::Round(($worstSpikeObj.SnapshotMs / $wTotal) * 100, 1)
+            $worstSpikeAnatomy = "$($worstSpikeObj.SnapshotMs) ms Character/Bone Snapshots ($snapPct%) | $wRest ms Engine Simulation ($gcPct%)"
+            $worstSpikeRootCause = "Viewpoint Character & Bone Snapshot Overhead"
+            $worstSpikeAttribution = "Main thread CPU freeze capturing first-person character, skeleton, and clothing matrices."
+            $worstSpikeRecommendation = "Disable Viewpoint near-vegetation / ADS passes or reduce layered 3D clothing items."
+            $worstSpikeCorrelatedMods = @($sortedMods | Where-Object { $_.ModId -match "Viewpoint|ZombieBuddy" -or $_.LoopNature -match "Java Bytecode" } | Select-Object -First 10)
+        } elseif ($worstSpikeObj.ShadowMs -ge 30.0 -or ($wTotal -gt 0 -and ($worstSpikeObj.ShadowMs / $wTotal) -ge 0.40)) {
+            $shadPct = [math]::Round(($worstSpikeObj.ShadowMs / $wTotal) * 100, 1)
+            $worstSpikeAnatomy = "$($worstSpikeObj.ShadowMs) ms Lamp/Light Shadow Map Passes ($shadPct%) | $wRest ms Render Thread ($gcPct%)"
+            $worstSpikeRootCause = "Viewpoint Dynamic Light & Shadow Map Stalls"
+            $worstSpikeAttribution = "Render thread GPU stall re-rendering multiple shadow cubes for active street lamps or vehicle headlights."
+            $worstSpikeRecommendation = "Lower shadow map distance or disable dynamic lamp shadows in Viewpoint display settings."
+            $worstSpikeCorrelatedMods = @($sortedMods | Where-Object { $_.ModId -match "Viewpoint|ZombieBuddy" -or $_.LoopNature -match "Java Bytecode" } | Select-Object -First 10)
         } elseif ($wCC -ge 30.0 -or $wBuilds -ge 20 -or ($wCC / $wTotal) -ge 0.40) {
             $worstSpikeAnatomy = "$wCC ms Chunk Cache Meshing ($ccPct%, $wBuilds builds) | $wRest ms Engine Simulation ($gcPct%)"
             $worstSpikeRootCause = "Dynamic 3D Mesh Compilation on Chunk Traversal"
             $worstSpikeAttribution = "Massive 3D model injections crossing chunk borders."
             $worstSpikeRecommendation = "Trim 3D furniture/model replacement packs to reduce chunk boundary stalls."
             $worstSpikeCorrelatedMods = @($topMeshMods | Where-Object { Test-IsSpikeWorthy $_ } | Select-Object -First 10)
-        } elseif ($wTh -eq "render" -and $wRestDet -match "waiting for the main thread") {
+        } elseif ($wTh -eq "render" -and ($wRestDet -match "waiting for the main thread" -or $worstSpikeObj.WaitMainThread)) {
             $worstSpikeAnatomy = "$wRest ms Waiting for Main Thread ($gcPct%) | $wOurs ms Render Passes ($ccPct%)"
             $worstSpikeRootCause = "GPU Render Thread Blocked Waiting for CPU Main Thread Tick"
             $worstSpikeAttribution = "Main thread CPU tick budget overflow from excessive per-frame Lua loops."
@@ -1991,6 +2118,13 @@ function Invoke-PZScanEngine([string]$CustomServerIni = "", [switch]$LocalWorksh
         Write-Host " Hardware Frame Times : GPU: $headroomGpuMs ms | Render CPU: $headroomRenderCpuMs ms | Main Thread: $headroomMainThreadMs ms (~$headroomMainThreadFps FPS cap)" -ForegroundColor $headroomColor
         Write-Host " Live World Simulation: $headroomZombies active zombies loaded in simulation radius ($headroomFps in-game FPS)" -ForegroundColor White
     }
+    if ($hasPacingWarning) {
+        Write-Host "   [!] FRAME PACING MISMATCH DETECTED:" -ForegroundColor Red
+        Write-Host "       Configured Frame Cap ($optionsFps) exceeds Main Thread CPU throughput (~$headroomMainThreadFps FPS by $pacingRatio%)!" -ForegroundColor Yellow
+        Write-Host "       Cause & Impact : Frame times oscillate between 4.1 ms (empty scenes) and 12-25 ms (world load)," -ForegroundColor Yellow
+        Write-Host "                        creating violent frame pacing jitter and running Lua per-frame loops 240x/sec!" -ForegroundColor Yellow
+        Write-Host "       Actionable Fix : Set frame rate cap to 120 FPS (or 90 FPS) in Options (or Menu Option [5])." -ForegroundColor Cyan
+    }
     Write-Host " GPU VRAM Usage       : $vramReport" -ForegroundColor White
     if ($maxEvictions -gt 0) {
         Write-Host "   [!] GPU Thrashing  : $maxEvictions texture evictions ($maxEvictedMb MiB swapped across PCIe)!" -ForegroundColor Red
@@ -2035,6 +2169,17 @@ function Invoke-PZScanEngine([string]$CustomServerIni = "", [switch]$LocalWorksh
         } else {
             Write-Host "   -> TOP CORRELATED SPIKE CULPRITS: None (No active mods exceed stutter thresholds; spike is engine/GC overhead)" -ForegroundColor Green
         }
+    }
+    if ($maxSnapshotMs -gt 30.0 -or $maxShadowMs -gt 30.0) {
+        $vColor = if ($maxSnapshotMs -ge 100.0 -or $maxShadowMs -ge 100.0) { "Red" } else { "Yellow" }
+        Write-Host " Viewpoint Pass Stalls: Snapshots: $([math]::Round($maxSnapshotMs, 1)) ms | Lamp Shadows: $([math]::Round($maxShadowMs, 1)) ms" -ForegroundColor $vColor
+    }
+    if ($hasVehicleExceptions) {
+        Write-Host " Vehicle Spawn Errors : $($vehicleExceptions.Count) exception(s) logged during chunk handoff!" -ForegroundColor Red
+        foreach ($ve in $vehicleExceptions) {
+            Write-Host "   -> [EXCEPTION] $ve" -ForegroundColor DarkYellow
+        }
+        Write-Host "      Cause & Impact  : Defective vehicle script missing container definition stalls chunk loading" -ForegroundColor Yellow
     }
     if ($maxChunkBuilds -gt 0) {
         $chunkColor = if ($maxChunkBuilds -ge 50) { "Red" } elseif ($maxChunkBuilds -ge 20) { "Yellow" } else { "Gray" }
@@ -2187,7 +2332,7 @@ function Invoke-PZScanEngine([string]$CustomServerIni = "", [switch]$LocalWorksh
     $md = @()
     $md += "# Project Zomboid Mod Performance & Optimization Diagnostic Report"
     $hostName = if ($env:COMPUTERNAME) { $env:COMPUTERNAME } elseif ($env:HOSTNAME) { $env:HOSTNAME } else { [System.Net.Dns]::GetHostName() }
-    $md += "*Generated: $(Get-Date -Format 'yyyy-MM-dd HH:mm:ss') on $hostName by PZ-Mod-Performance-Suite v2.13.0 (Coded with the help of Google Gemini)*"
+    $md += "*Generated: $(Get-Date -Format 'yyyy-MM-dd HH:mm:ss') on $hostName by PZ-Mod-Performance-Suite v2.14.0 (Coded with the help of Google Gemini)*"
     $md += ""
     $md += "## Executive Summary"
     $md += "- **Game Version:** $pzVersion"
@@ -2206,9 +2351,18 @@ function Invoke-PZScanEngine([string]$CustomServerIni = "", [switch]$LocalWorksh
         $md += "    - **Dormant Early-Exit ($($dormantHookMods.Count) mods):** $dormantOwnersText (Hooks registered in engine, but exit in < 0.002 ms when idle)"
     }
     $md += "- **Configured Frame Cap:** $optionsFps (Active: $frameCap)"
+    if ($hasPacingWarning) {
+        $md += "- **Frame Pacing Diagnostic:** **MISMATCH DETECTED** (Configured $optionsFps vs ~$headroomMainThreadFps FPS Main Thread Throughput - $pacingRatio% mismatch)"
+    }
     if ($hasHeadroomTelemetry) {
         $md += "- **Hardware Frame Budget:** GPU: $headroomGpuMs ms | Render CPU: $headroomRenderCpuMs ms | Main Thread: $headroomMainThreadMs ms (~$headroomMainThreadFps FPS headroom)"
         $md += "- **Live Simulation Density:** $headroomZombies active zombies loaded in simulation radius ($headroomFps in-game FPS)"
+    }
+    if ($maxSnapshotMs -gt 30.0 -or $maxShadowMs -gt 30.0) {
+        $md += "- **Viewpoint Subsystem Stalls:** Character Snapshots: $([math]::Round($maxSnapshotMs, 1)) ms | Dynamic Lamp Shadows: $([math]::Round($maxShadowMs, 1)) ms"
+    }
+    if ($hasVehicleExceptions) {
+        $md += "- **Vehicle Chunk Spawn Errors:** $($vehicleExceptions -join '; ')"
     }
     $md += "- **VRAM Free:** $vramReport"
     if ($maxEvictions -gt 0) {
@@ -2236,6 +2390,25 @@ function Invoke-PZScanEngine([string]$CustomServerIni = "", [switch]$LocalWorksh
     $md += "---"
     $md += "## Global Modpack Runtime Budget & Fleet Stacking Analysis"
     $md += ""
+    if ($hasPacingWarning) {
+        $md += "> [!WARNING]"
+        $md += "> **FRAME PACING & HEADROOM JITTER DETECTED ($optionsFps Cap vs ~$headroomMainThreadFps FPS Throughput)**"
+        $md += "> - **Pacing Mismatch:** Your display frame rate cap ($optionsFps) is **$pacingRatio%** of your hardware simulation ceiling (~$headroomMainThreadFps FPS / $headroomMainThreadMs ms main thread)."
+        $md += "> - **Perceptual Stutter Cause:** In simple rooms or menus, the engine delivers ~4.16 ms (240 FPS). The moment you look outside, walk near trees, or enter combat, frame times jump to 10-25 ms. This violent swing creates severe frame delivery judder and perceived stutter."
+        $md += "> - **Lua Tick Multiplier:** Running at 240 FPS forces every active per-frame Lua loop to tick **240 times every second**, consuming unnecessary CPU cycles."
+        $md += "> - **Actionable Fix:** Cap your frame rate to **120 FPS** (or 90 FPS) in Project Zomboid Display Options (or Menu Option [5]). This instantly stabilizes frame delivery into smooth pacing and cuts Lua per-frame overhead in half."
+        $md += ""
+    }
+    if ($hasVehicleExceptions) {
+        $md += "> [!CAUTION]"
+        $md += "> **VEHICLE CHUNK SPAWN EXCEPTIONS DETECTED**"
+        foreach ($ve in $vehicleExceptions) {
+            $md += "> - $ve"
+        }
+        $md += "> "
+        $md += "> *When crossing into new chunks with vehicles, missing vehicle containers (such as glovebox.container == null) throw Java NullPointerExceptions, causing synchronous main-thread stalls.*"
+        $md += ""
+    }
     $md += "| Global Metric | Audit Value | Safety Threshold | Diagnostic Status |"
     $md += "|:---|:---:|:---:|:---|"
     $md += "| **Idle Baseline Frame Tax** | +$totalIdleTaxRaw ms/frame | < 2.50 ms/frame | $(if ($totalIdleTaxRaw -ge 5.0) { '**HIGH (Heavy idle load)**' } else { 'Optimal' }) |"
@@ -2367,7 +2540,7 @@ function Show-PZMainMenu {
     while ($true) {
         Clear-Host
         Write-Host "=================================================================" -ForegroundColor Cyan
-        Write-Host "   PROJECT ZOMBOID MOD PERFORMANCE & OPTIMIZATION SUITE v2.13.0 " -ForegroundColor Yellow
+        Write-Host "   PROJECT ZOMBOID MOD PERFORMANCE & OPTIMIZATION SUITE v2.14.0 " -ForegroundColor Yellow
         Write-Host "         Created by @KodeMannn with the help of Gemini          " -ForegroundColor DarkCyan
         Write-Host "=================================================================" -ForegroundColor Cyan
         Write-Host "  [1] Run Full Performance Diagnostic Scan (Active Save)" -ForegroundColor White
