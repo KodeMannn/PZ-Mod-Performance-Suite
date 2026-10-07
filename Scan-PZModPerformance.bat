@@ -1,6 +1,6 @@
-﻿<# :
+<# :
 @echo off
-title Project Zomboid Mod Performance ^& Optimization Suite v2.15.0
+title Project Zomboid Mod Performance ^& Optimization Suite v2.16.0
 color 0F
 powershell -NoProfile -ExecutionPolicy Bypass -Command "& ([scriptblock]::Create([System.IO.File]::ReadAllText('%~f0'))) %*"
 echo.
@@ -9,7 +9,7 @@ exit /b
 #>
 <#
 .SYNOPSIS
-    Project Zomboid Mod Performance & Optimization Suite v2.15.0
+    Project Zomboid Mod Performance & Optimization Suite v2.16.0
 .DESCRIPTION
     Comprehensive diagnostic scanner and optimization toolkit for Project Zomboid (Build 42 & 41).
     Features Precision Slow Frame Anatomy Dissection (Main vs Render Thread, GC pauses vs Chunk Cache),
@@ -809,6 +809,270 @@ function Analyze-ModLuaSemantics([System.IO.FileInfo[]]$luaFiles) {
     }
 }
 
+function Get-ModTriggerScenarios {
+    param(
+        [string]$modId,
+        [string]$modName,
+        [int]$modelCount,
+        [int]$worldMeshCount,
+        [int]$characterMeshCount,
+        [double]$textureMB,
+        [double]$totalMB,
+        [int]$permHooks,
+        [int]$transHooks,
+        [int]$throttledHooks,
+        [int]$inHookWorldQueries,
+        [int]$inHookInvQueries,
+        [int]$inHookHeavyContainers,
+        [int]$inHookUIPolls,
+        [int]$inHookJNICalls,
+        [int]$inHookZombieQueries,
+        [int]$inHookTileQueries,
+        [bool]$isStationaryGated,
+        [bool]$isOptInToggle,
+        [string]$optInModeName,
+        [bool]$hasJavaJar,
+        [int]$javaJarCount,
+        [double]$activeTaxRaw,
+        [double]$idleTaxRaw,
+        [bool]$isContinuousPolling,
+        [bool]$isDormantEarlyExit
+    )
+
+    $scenarios = [System.Collections.Generic.List[PSCustomObject]]::new()
+
+    # Helper to add unique scenarios
+    $addScen = {
+        param([string]$name, [string]$impact, [string]$sev, [string]$state, [string]$cond, [int]$weight)
+        foreach ($s in $scenarios) {
+            if ($s.ScenarioName -eq $name) { return }
+        }
+        $scenarios.Add([PSCustomObject]@{
+            ScenarioName = $name
+            Impact       = $impact
+            Severity     = $sev
+            State        = $state
+            Condition    = $cond
+            Weight       = $weight
+        })
+    }
+
+    # 1. Viewpoint Core
+    if ($modId -eq "Viewpoint" -or $modName -eq "Viewpoint") {
+        & $addScen "Character & Skeletal Bone Snapshots" "~126-295 ms [Snapshot CPU Stall]" "CRITICAL" "Active in 1P" "First-person character model, clothing rigs, and bone snapshot evaluations" 1
+        & $addScen "Dynamic Lamp & Headlight Shadows" "~78-195 ms [Shadow Render Stall]" "HIGH" "Situational" "Near active street lamps, interior lights, or vehicle headlights (shadow cube maps)" 2
+        & $addScen "1P Camera Matrix & In-Engine Render Pass" "~10-25 ms [1P Render Pass] (+0.75 ms/frame)" "MODERATE" "Continuous in 1P" "Active first-person camera transform, weapon model projection, and depth clipping" 3
+        & $addScen "Third-Person Mode Baseline" "< 1 ms [Imperceptible] (+0.15 ms/frame idle)" "NEGLIGIBLE" "Dormant in 3P" "Playing in standard third-person perspective (idle engine hooks)" 5
+    }
+    # 2. Viewpoint True Weathers & Lighting
+    elseif ($modId -match "ViewpointTrueWeathers$" -or $modName -match "True Weathers & Lighting") {
+        & $addScen "Heavy Storms, Rain, Fog & Lightning Passes" "~10-30 ms [Weather Shader / Lighting Pass] (+1.20 ms/frame)" "MODERATE" "Situational" "During active rainstorms, dense fog, thunder, and dynamic lightning passes" 3
+        & $addScen "Clear Skies / Calm Weather Baseline" "< 1 ms [Imperceptible] (+0.05 ms/frame idle)" "NEGLIGIBLE" "Dormant in Clear Weather" "Clear or overcast weather with no active storm shaders" 5
+    }
+    # 3. Viewpoint True Weathers - Gameplay
+    elseif ($modId -match "ViewpointTrueWeathersGameplay" -or $modName -match "True Weathers - Gameplay") {
+        & $addScen "Storm / Fog Zombie Sensory Calculations" "~5-15 ms [Weather Sensory Calculation] (+0.35 ms/frame)" "LOW" "Situational" "During heavy storms or dense fog modifying zombie hearing and sight perception" 4
+        & $addScen "Clear Weather Sensory Baseline" "< 1 ms [Imperceptible] (0.00 ms idle)" "NEGLIGIBLE" "Dormant in Clear Weather" "Normal weather conditions" 5
+    }
+    # 4. Viewpoint TREE in 3D
+    elseif ($modId -match "NearVegetation|TREE in 3D" -or $modName -match "TREE in 3D") {
+        & $addScen "Dense Forests & Woodland Tree Meshing" "~15-35 ms [3D Tree Frustum Render] (+0.85 ms/frame)" "MODERATE" "Situational" "Near dense forests, pine groves, or heavy vegetation foliage" 3
+        & $addScen "Cleared Areas, Roads & Indoors" "< 1 ms [Imperceptible] (0.00 ms idle)" "NEGLIGIBLE" "Dormant in Cleared Areas" "Away from dense tree coverage" 5
+    }
+    # 5. Viewpoint True Ballistics
+    elseif ($modId -match "ViewpointTrueBallistics" -or $modName -match "True Ballistics") {
+        & $addScen "Firearm Discharge & Ballistics Raycasting" "~10-25 ms [Ballistics Raycast Stall] (+0.75 ms/frame)" "MODERATE" "Situational" "While actively firing firearms (bullet trajectory physics & ricochet raycasts)" 3
+        & $addScen "Holstered / Melee Combat Baseline" "< 1 ms [Imperceptible] (0.00 ms idle)" "NEGLIGIBLE" "Dormant Out of Shooting" "Melee weapons, unarmed, or firearms holstered" 5
+    }
+    # 6. Blood FX for Viewpoint
+    elseif ($modId -match "ViewpointBloodFX" -or $modName -match "Blood FX for Viewpoint") {
+        & $addScen "Combat Hits & Zombie Blood Splatter" "~10-25 ms [Blood Particle & Lens Splatter] (+0.60 ms/frame)" "MODERATE" "Situational" "Active combat hits, blood particles on screen lens, and zombie gore decals" 3
+        & $addScen "Exploration Out of Combat" "< 1 ms [Imperceptible] (0.00 ms idle)" "NEGLIGIBLE" "Dormant Out of Combat" "No active weapon hits or blood particle triggers" 5
+    }
+    # 7. Project Viewpoint: Recoil & ADS
+    elseif ($modId -match "ProjectViewpointADS" -or $modName -match "Recoil & ADS") {
+        & $addScen "Aiming Down Sights (ADS) & Firing Recoil" "~5-15 ms [Action Blip: Recoil & ADS Calc] (+0.50 ms/frame)" "LOW" "Situational" "While aiming down sights with weapons and processing camera recoil impulse" 4
+        & $addScen "Hip-Fire / Weapon Lowered Baseline" "< 1 ms [Imperceptible] (0.00 ms idle)" "NEGLIGIBLE" "Dormant Idle" "Walking, running, or resting without ADS" 5
+    }
+    # 8. Viewpoint Advanced Movement
+    elseif ($modId -match "ViewpointAdvancedMovement" -or $modName -match "Advanced Movement") {
+        & $addScen "Leaning, Prone, Crawling & Vaulting" "~5-15 ms [Movement State Transition] (+0.40 ms/frame)" "LOW" "Situational" "Actively leaning around corners, crawling prone, or vaulting high fences" 4
+        & $addScen "Standard Upright Walking / Sprinting" "< 1 ms [Imperceptible] (0.00 ms idle)" "NEGLIGIBLE" "Dormant Walking" "Standard movement locomotion" 5
+    }
+    # 9. Viewpoint - Advanced Throwables
+    elseif ($modId -match "ViewpointAdvancedThrowables" -or $modName -match "Advanced Throwables") {
+        & $addScen "Throwable Aiming Arc & Projectile Physics" "~5-15 ms [Action Blip: Throwable Physics] (+0.50 ms/frame)" "LOW" "Situational" "While aiming trajectory arc and throwing grenades, pipe bombs, or molotovs" 4
+        & $addScen "Walking with No Throwables Active" "< 1 ms [Imperceptible] (0.00 ms idle)" "NEGLIGIBLE" "Dormant on Foot" "No active projectile throwing" 5
+    }
+    # 10. Viewpoint - Door Fix
+    elseif ($modId -match "ViewpointDoor" -or $modName -match "Door Fix") {
+        & $addScen "Near Doors & Threshold Transitions" "~2-8 ms [Door Model Lighting Adjustment] (+0.20 ms/frame)" "LOW" "Situational" "Standing near open or closed doorways" 4
+        & $addScen "Open Ground Away from Doors" "< 1 ms [Imperceptible] (0.00 ms idle)" "NEGLIGIBLE" "Dormant Away from Doors" "More than 3 tiles away from door objects" 5
+    }
+    # 11. Viewpoint - Surface Fix
+    elseif ($modId -match "ViewpointSurface" -or $modName -match "Surface Fix") {
+        & $addScen "Indoors & Multi-Story Roof Surfaces" "~2-8 ms [Surface Mesh Clip Pass] (+0.25 ms/frame)" "LOW" "Situational" "Inside buildings, multi-level structures, or under roofs" 4
+        & $addScen "Open Outdoor Ground" "< 1 ms [Imperceptible] (0.00 ms idle)" "NEGLIGIBLE" "Dormant Outdoors" "Outside on ground level" 5
+    }
+    # 12. Viewpoint - 3D Fences
+    elseif ($modId -match "ViewpointFences3D" -or $modName -match "3D Fences") {
+        & $addScen "Near 3D Wire & Wooden Fences" "~2-8 ms [Fence Mesh Frustum Pass]" "LOW" "Situational" "In view radius of custom 3D fence objects" 4
+        & $addScen "Away from Fences" "< 1 ms [Imperceptible] (0.00 ms idle)" "NEGLIGIBLE" "Dormant Away from Fences" "No 3D fences in view frustum" 5
+    }
+    # 13. Project Viewpoint Controller Support
+    elseif ($modId -match "ControllerSupport|Joypad" -or $modName -match "Controller Support") {
+        & $addScen "No Controller Connected (Null RenderTick Polling)" "~5-15 ms [Minor Blip: Polls Gamepad Every Frame on RenderTick]" "LOW" "Continuous (No Controller)" "Keyboard/mouse play without a controller plugged in" 4
+        & $addScen "Gamepad Connected (Analog Joystick Processing)" "~1-3 ms [Gamepad Input Poll]" "LOW" "Active with Controller" "Gamepad connected and transmitting stick/button events" 4
+    }
+    # 14. ZombieBuddy
+    elseif ($modId -eq "ZombieBuddy" -or $modName -eq "ZombieBuddy") {
+        & $addScen "Engine Startup Bytecode Injection" "< 1 ms [Imperceptible in Gameplay]" "NEGLIGIBLE" "Launch Injection Only" "One-time class transformation at game launch; zero continuous tick tax" 5
+    }
+
+    # 15. 3D Meshes & Textures (Generic Non-Vehicle Non-Clothing)
+    $isVehicle = ($modId -match "VanillaVehiclesAnimated|Vehicle|jeep|chevy|ford|dodge|nissan|amgeneral|toyota|ferret|oshkosh|corvette|camaro|mustang|volvo|beetle|KI5" -and $modId -ne "PushVehicle")
+    $isClothing = ($modId -match "SPNCC|GanydeBielovzki|AuthenticZ|Clothing|Armor|Costume" -or $characterMeshCount -ge 5)
+    if (-not $isVehicle -and -not $isClothing -and ($scenarios.Count -eq 0 -or ($modId -match "PZVoxelStudioViewpoint" -or $worldMeshCount -gt 500))) {
+        if ($worldMeshCount -gt 5000 -or $modId -match "PZVoxelStudioViewpoint") {
+            & $addScen "Chunk Border Traversal & High-Speed Driving" "~350-550 ms [Severe Freeze]" "CRITICAL" "Situational (Chunk Traversal)" "Crossing map chunk boundaries while engine builds and uploads $($worldMeshCount) 3D meshes" 1
+        } elseif ($worldMeshCount -gt 1000) {
+            & $addScen "Chunk Border Traversal & World Streaming" "~100-250 ms [Noticeable Hitch]" "HIGH" "Situational (Chunk Traversal)" "Crossing map chunk boundaries with $($worldMeshCount) custom 3D meshes" 2
+        } elseif ($worldMeshCount -gt 200) {
+            & $addScen "Chunk Cell Loading & Mesh Injection" "~20-60 ms [Micro-Stutter]" "MODERATE" "Situational (Chunk Traversal)" "Loading cell with $($worldMeshCount) custom 3D world models" 3
+        } elseif ($worldMeshCount -ge 20) {
+            & $addScen "Frustum Culling & Local Model Rendering" "~5-15 ms [Render Blip]" "LOW" "Situational" "Camera view frustum contains $($worldMeshCount) custom 3D meshes" 4
+        }
+
+        if ($textureMB -gt 100) {
+            & $addScen "VRAM Texture Streaming & PCIe Transfer" "~100-250 ms [VRAM Thrash Hitch]" "HIGH" "Situational (Asset Load)" "Loading high-resolution texture assets ($([math]::Round($textureMB, 1)) MB) across PCIe bus" 2
+        } elseif ($textureMB -ge 40) {
+            & $addScen "VRAM Texture Allocation & Atlas Binding" "~25-75 ms [Texture Load Hitch]" "MODERATE" "Situational (Asset Load)" "Binding $([math]::Round($textureMB, 1)) MB textures into VRAM" 3
+        }
+
+        if (($worldMeshCount -ge 20 -or $textureMB -ge 40) -and $scenarios.Count -ge 1) {
+            & $addScen "Steady-State Local Exploration" "< 1 ms [Imperceptible]" "NEGLIGIBLE" "Dormant (Loaded)" "Staying within already-meshed chunks with textures resident in memory" 5
+        }
+    }
+
+    # 16. Vehicles
+    if ($isVehicle) {
+        $vehMeshSpike = if ($worldMeshCount -gt 200) { "~20-60 ms [Vehicle Streaming Hitch]" } else { "~10-25 ms [Vehicle Streaming Hitch]" }
+        & $addScen "Chunk Border Traversal & Vehicle Streaming" $vehMeshSpike "MODERATE" "Situational (Chunk Traversal)" "Crossing chunk boundaries with spawned vehicle 3D models and textures" 3
+        & $addScen "While Actively Driving (Physics & Speedometer Polling)" "~5-15 ms [Driving Blip] (+0.45 ms/frame active)" "LOW" "Active Driving" "Operating vehicle with active engine physics, dashboard gauges, and wheel rotation" 4
+        if ($modId -match "VanillaVehiclesAnimated|KI5campers|KI5trailers") {
+            & $addScen "Vehicle Chunk Handoff Container Check" "~30-80 ms [Script Exception Delay]" "MODERATE" "Situational (Chunk Handoff)" "Spawning vehicles with missing accessory script containers (e.g. glovebox.container)" 3
+        }
+        & $addScen "Parked / Exploring on Foot" "< 1 ms [Imperceptible] (Dormant on Foot)" "NEGLIGIBLE" "Dormant on Foot" "Player is outside vehicle; zero per-frame physics loop tax" 5
+    }
+
+    # 17. Containers & Inventory
+    $optInPrefix = if ($optInModeName) { "Opt-In [$optInModeName]: " } elseif ($isOptInToggle) { "Opt-In Mode: " } else { "Situational: " }
+    if ($inHookHeavyContainers -ge 1) {
+        if ($isStationaryGated) {
+            & $addScen "When Standing Still / Stationary (Container Rebuild)" "~5-15 ms [Stationary Blip]" "LOW" "Stationary" "Stationary gating allows container rebuild only when standing still" 4
+            & $addScen "While Moving on Foot" "< 1 ms [Imperceptible]" "NEGLIGIBLE" "Dormant on Foot" "Zero movement hitch while walking or running" 5
+        } else {
+            & $addScen "Moving Near Containers (Backpack & Weight Rebuild)" "~15-40 ms [Container Hitch]" "MODERATE" "Active Movement Near Containers" "Unconstrained container rebuild firing on tick while moving near loot containers" 3
+            & $addScen "Standing Still Away from Containers" "< 1 ms [Imperceptible]" "NEGLIGIBLE" "Dormant" "Zero container rebuilds away from loot containers" 5
+        }
+    }
+    if ($modName -match "Viewpoint QOL" -or $modId -match "ViewpointQOL") {
+        & $addScen "While Viewpoint / UI Settings Open" "~2-8 ms [UI Polling Delay]" "LOW" "Situational (Menu Open)" "Querying Viewpoint UI toggles and layout elements" 4
+    } elseif ($inHookInvQueries -ge 5 -or $modId -match "Equipment|Inventory|Hotbar|Crafting|Menu|Map|Health|DragAndDrop") {
+        & $addScen "While Inventory / Container Grid Open" "~2-8 ms [Inventory Grid Delay]" "LOW" "Situational (Inventory Open)" "Populating item slots, weight calculation, and inventory UI tree" 4
+        & $addScen "Inventory Closed Baseline" "< 1 ms [Imperceptible]" "NEGLIGIBLE" "Dormant" "Normal gameplay with inventory UI closed" 5
+    }
+
+    # 18. Actions & Mechanics
+    if ($modId -match "TakeABath|BathAndShower|Shower|Hygiene" -or $modName -match "Take A Bath|Shower") {
+        & $addScen "Bathing / Showering Action" "~10-25 ms [Hygiene / Fluid Hitch]" "LOW" "Active Action" "Interacting with plumbing fixtures to wash body/clothing" 4
+        & $addScen "Normal Exploration on Foot" "< 1 ms [Imperceptible]" "NEGLIGIBLE" "Dormant Early-Exit" "Walking / running away from bathtubs (early return)" 5
+    }
+    if ($modId -match "PushVehicle" -or $modName -match "Push Vehicle") {
+        & $addScen "Physically Pushing a Vehicle" "~5-15 ms [Vehicle Physics Impulse]" "LOW" "Active Action" "Manually pushing a vehicle with pending impulse queries" 4
+        & $addScen "Normal Walking / Driving" "< 1 ms [Imperceptible]" "NEGLIGIBLE" "Dormant Early-Exit" "Zero pending vehicle push actions" 5
+    }
+    if ($modId -match "LethalStealth|RET_LethalStealth" -or $modName -match "Lethal Stealth") {
+        & $addScen "Sneaking / In Stealth Stance" "~5-15 ms [Stealth Sight Cone & Critical Calc]" "LOW" "Situational (Stealth Stance)" "Crouched/sneaking with active line-of-sight & assassinate checks" 4
+        & $addScen "Upright Walking or Running" "< 1 ms [Imperceptible]" "NEGLIGIBLE" "Dormant Early-Exit" "Upright stance (early return bypasses stealth loops)" 5
+    }
+    if ($modId -match "NeatLockpicking|Lockpick" -or $modName -match "Lockpicking") {
+        & $addScen "Lockpicking Mini-Game Active" "~5-15 ms [Lockpick UI & Tumbler Physics]" "LOW" "Active Action" "Manipulating bobby pin and screwdriver in tumbler mini-game" 4
+        & $addScen "Inspecting Locked Doors" "~2-8 ms [Translation String Lookup]" "LOW" "Situational (Hover / Inspect)" "Examining door lock status and displaying contextual prompt" 4
+        & $addScen "Normal Exploration" "< 1 ms [Imperceptible]" "NEGLIGIBLE" "Dormant" "Exploring without interacting with locked doors" 5
+    }
+    if ($modId -match "DynamicGearRattling|GearRattling" -or $modName -match "Gear Rattling") {
+        & $addScen "Jogging / Sprinting with Heavy Backpack" "~5-15 ms [Gear Audio Event Trigger]" "LOW" "Active Locomotion" "Moving on foot with high inventory weight causing gear noise" 4
+        & $addScen "Standing Still, Sneaking, or Driving" "< 1 ms [Imperceptible]" "NEGLIGIBLE" "Dormant" "Stationary, crouched, or inside a vehicle" 5
+    }
+    if ($modId -match "traitsAsSkills" -or $modName -match "Traits As Skills") {
+        & $addScen "Zombie Kill & Skill XP Progression Burst" "~5-15 ms [XP Table Calculation]" "LOW" "Combat Action" "Defeating zombies and recalculating dynamic trait XP progression" 4
+        & $addScen "Passive Gameplay Between Kills" "< 1 ms [Imperceptible]" "NEGLIGIBLE" "Throttled Timer" "Periodic timer loop between XP triggers" 5
+    }
+    if ($modId -match "P4TidyUpMeister|TidyUpMeister" -or $modName -match "Tidy Up Meister") {
+        & $addScen "Completing Timed Actions (Auto-Stow Scan)" "~5-15 ms [Inventory Auto-Stow Scan]" "LOW" "Action Completion" "Finishing actions and querying containers to auto-repack tools" 4
+        & $addScen "Normal Exploration" "< 1 ms [Imperceptible]" "NEGLIGIBLE" "Dormant" "Walking or fighting with no active stow actions" 5
+    }
+    if ($modId -match "Construction1PViewpoint" -or $modName -match "Construction 1P") {
+        & $addScen "Carpentry & Object Placement Preview" "~5-15 ms [Ghost Tile Placement Render]" "LOW" "Active Building" "Hovering blueprint or ghost furniture tiles in first-person" 4
+        & $addScen "Normal Exploration" "< 1 ms [Imperceptible]" "NEGLIGIBLE" "Dormant" "Standard movement without construction cursor" 5
+    }
+    if ($modId -match "ALife|SuperbSurvivors|SubparSurvivors|NPC|Bandits|Humanoid" -or $modName -match "A-Life|Superb Survivors|NPCs|Bandits") {
+        & $addScen "Hostile Combat & Gunfights" "~50-150 ms [Combat AI Spike]" "HIGH" "Combat Burst" "Active NPC combat, dynamic pathfinding, and weapon sensory raycasts" 2
+        & $addScen "Ambient Sensory Roaming" "~20-60 ms [AI Simulation Spike] (+1.50 ms/frame)" "MODERATE" "Continuous Background" "NPC navigation and environmental awareness background loops" 3
+    }
+    if ($inHookZombieQueries -ge 3 -or $modId -match "TrueCrawling|ZombieDismemberment|ZombieAnimation|ZombieCrawl|ZombieCollision") {
+        & $addScen "Dense Horde Proximity & Combat" "~10-35 ms [Combat Hitch]" "MODERATE" "Combat Burst" "Multiple zombies crawling or losing limbs within combat radius" 3
+        & $addScen "Cleared Areas (Zero Zombies in Radius)" "< 1 ms [Imperceptible]" "NEGLIGIBLE" "Dormant" "No active zombies in immediate simulation sector" 5
+    }
+    if ($modId -match "PushDoors|Push Door|CyesPushDoors" -or $modName -match "Push Doors") {
+        & $addScen "Near Closed Doors (Physical Push Physics)" "~5-15 ms [Door Hitch]" "LOW" "Situational (Near Doors)" "Bumping into closed doors to trigger swing physics" 4
+        & $addScen "Background 25-Tile Continuous Door Scanner" "+0.25 ms/frame continuous polling tax" "LOW" "Continuous Background" "Spatial door scan every 2 ticks even when away from doors" 4
+    }
+    if ($modId -match "PZ_Pulse|PZPulse" -or $modName -match "PZ Pulse") {
+        & $addScen "Browser Telemetry Sync Wave (~Every 500ms)" "~5-15 ms [HTTP/Socket Telemetry Flush]" "LOW" "Periodic Sync" "Flushing game state to companion browser second-screen dashboard" 4
+        & $addScen "Between Sync Waves" "< 1 ms [Imperceptible]" "NEGLIGIBLE" "Dormant" "Between 500ms sync intervals" 5
+    }
+    if ($transHooks -ge 15 -or $modId -match "Journal|Burd") {
+        & $addScen "Transcribing or Reading Full Journal XP Sync" "~50-150 ms [Action Spike: XP Deserialization]" "HIGH" "Action Burst" "Synchronizing character XP and traits to/from diary item" 2
+        & $addScen "Normal Gameplay (Journal in Bag)" "< 1 ms [Imperceptible]" "NEGLIGIBLE" "Dormant" "Passive inventory item with zero background cost" 5
+    }
+    if ($modId -match "aparosa_pz3dMinimap") {
+        & $addScen "Continuous 3D Minimap Frustum Projection" "~50-120 ms [Continuous Minimap Render Lag]" "CRITICAL" "Continuous (HUD Visible)" "Rendering second camera view and 3D minimap overlay" 1
+        & $addScen "Minimap Hidden / Closed" "< 1 ms [Imperceptible]" "NEGLIGIBLE" "Dormant" "Minimap interface hidden" 5
+    }
+    if ($isClothing) {
+        if ($textureMB -ge 15) {
+            & $addScen "Texture Allocation (Clothing Textures in VRAM)" "~20-60 ms [Texture Buffer Hitch]" "MODERATE" "Situational (Asset Load)" "Streaming high-resolution clothing textures ($([math]::Round($textureMB, 1)) MB)" 3
+        }
+        & $addScen "Character Rendering & Skeletal Bone Evaluation" "~5-20 ms [Character Mesh Pass]" "LOW" "Situational (In Frustum)" "Evaluating skeletal bone matrices for custom layered clothing" 4
+        & $addScen "Standard Gameplay (Cached)" "< 1 ms [Imperceptible]" "NEGLIGIBLE" "Dormant (Cached)" "Equipped clothing already resident in VRAM" 5
+    }
+
+    # 19. Generic Fallbacks
+    if ($scenarios.Count -eq 0) {
+        if ($hasJavaJar) {
+            & $addScen "Native Java Engine Extension Execution" "~5-15 ms [Java Engine Extension] (+0.50 ms active)" "LOW" "Situational (JVM)" "Direct bytecode execution during interaction" 4
+            & $addScen "Idle on Foot" "< 1 ms [Imperceptible]" "NEGLIGIBLE" "Dormant" "Standard movement without interacting" 5
+        } elseif ($permHooks -gt 0) {
+            if ($isContinuousPolling) {
+                & $addScen "Continuous Engine Hook Tick Loop" "~2-8 ms [Frame Delay] (+$activeTaxRaw ms active)" "LOW" "Continuous Polling" "Unconstrained permanent hook firing every single frame" 4
+                & $addScen "Idle Baseline Tax" "+$idleTaxRaw ms/frame" "LOW" "Continuous Baseline" "Java-to-Lua event invocation cost" 4
+            } else {
+                & $addScen "Active Interaction / Hook Execution" "~2-8 ms [Frame Delay] (+$activeTaxRaw ms active)" "LOW" "Active Interaction" "Executing hook payload during specific player interaction" 4
+                & $addScen "Dormant Idle (Early Return)" "< 1 ms [Imperceptible] (0.00 ms idle)" "NEGLIGIBLE" "Dormant (Early-Exit)" "Hook registered in engine, exits in < 0.002 ms when idle" 5
+            }
+        } elseif ($throttledHooks -gt 0) {
+            & $addScen "Periodic Timer Execution (~Every 5-10s)" "~5-15 ms [Minor Blip]" "LOW" "Periodic Timer" "Modulo / timer-gated logic pulse" 4
+            & $addScen "Between Timer Pulses" "< 1 ms [Imperceptible]" "NEGLIGIBLE" "Dormant" "Zero execution between intervals" 5
+        } else {
+            & $addScen "Standard Gameplay" "< 1 ms [Imperceptible]" "NEGLIGIBLE" "Passive / Event-Driven" "Clean passive mod with no continuous background drag" 5
+        }
+    }
+
+    return @($scenarios | Sort-Object Weight)
+}
+
 function Get-ModStutterMetrics {
     param(
         [string]$modId,
@@ -832,147 +1096,11 @@ function Get-ModStutterMetrics {
         [int]$inHookZombieQueries = 0,
         [int]$inHookTileQueries = 0,
         [bool]$hasJavaJar = $false,
-        [int]$javaJarCount = 0
+        [int]$javaJarCount = 0,
+        [int]$characterMeshCount = 0
     )
 
-    # 1. Potential Spike Duration (ms)
-    $spikeMs = "< 1 ms [Imperceptible]"
-    $spikeSeverity = "NEGLIGIBLE"
-
-    if ($modId -match "PZVoxelStudioViewpoint" -or $worldMeshCount -gt 5000) {
-        $spikeMs = "~350-550 ms [Severe Freeze]"
-        $spikeSeverity = "CRITICAL"
-    } elseif ($worldMeshCount -gt 1000) {
-        $spikeMs = "~100-250 ms [Noticeable Hitch]"
-        $spikeSeverity = "HIGH"
-    } elseif ($textureMB -gt 100) {
-        $spikeMs = "~100-250 ms [VRAM Thrash Hitch]"
-        $spikeSeverity = "HIGH"
-    } elseif ($modId -match "aparosa_pz3dMinimap") {
-        $spikeMs = "~50-120 ms [Continuous Lag]"
-        $spikeSeverity = "CRITICAL"
-    } elseif ($modId -match "ALife|SuperbSurvivors|SubparSurvivors|NPC|Bandits|Humanoid" -or $modName -match "A-Life|Superb Survivors|NPCs|Bandits") {
-        $spikeMs = "~20-60 ms [AI Simulation Spike]"
-        $spikeSeverity = "MODERATE"
-    } elseif ($transHooks -ge 15 -or $modId -match "Journal|Burd") {
-        $spikeMs = "~50-150 ms [Action Spike]"
-        $spikeSeverity = "HIGH"
-    } elseif ($modId -match "VanillaVehiclesAnimated" -or $worldMeshCount -gt 200) {
-        $spikeMs = "~20-60 ms [Micro-Stutter]"
-        $spikeSeverity = "MODERATE"
-    } elseif ($inHookHeavyContainers -ge 1) {
-        if ($isStationaryGated) {
-            $spikeMs = "~5-15 ms [Stationary Blip]"
-            $spikeSeverity = "LOW"
-        } else {
-            $spikeMs = "~15-40 ms [Container Hitch]"
-            $spikeSeverity = "MODERATE"
-        }
-    } elseif ($inHookZombieQueries -ge 3 -or $modId -match "TrueCrawling|ZombieDismemberment|ZombieAnimation|ZombieCrawl|ZombieCollision") {
-        $spikeMs = "~10-35 ms [Combat Hitch]"
-        $spikeSeverity = "MODERATE"
-    } elseif ($modId -match "TakeABath|BathAndShower|Shower|Hygiene" -or $modName -match "Take A Bath|Shower") {
-        $spikeMs = "~10-25 ms [Hygiene / Fluid Hitch]"
-        $spikeSeverity = "LOW"
-    } elseif ($modId -match "PushDoors|Push Door|CyesPushDoors" -or $modName -match "Push Doors") {
-        $spikeMs = "~5-15 ms [Door Hitch]"
-        $spikeSeverity = "LOW"
-    } elseif ($inHookTileQueries -ge 5) {
-        $spikeMs = "~5-15 ms [Object Query Blip]"
-        $spikeSeverity = "LOW"
-    } elseif ($inHookUIPolls -ge 5 -and ($permHooks -gt 0 -or $throttledHooks -gt 0)) {
-        $spikeMs = "~2-8 ms [UI Polling Delay]"
-        $spikeSeverity = "LOW"
-    } elseif ($inHookJNICalls -ge 5 -and ($permHooks -gt 0 -or $throttledHooks -gt 0)) {
-        $spikeMs = "~2-8 ms [JNI Settings Delay]"
-        $spikeSeverity = "LOW"
-    } elseif (($modId -match "Equipment|Inventory|Hotbar|Crafting|Menu|Map|Health|DragAndDrop" -or $modName -match "Equipment|Inventory|Hotbar|Crafting|Menu|Map|Health") -and ($permHooks -gt 0 -or $throttledHooks -gt 0 -or $inHookInvQueries -gt 0)) {
-        $spikeMs = "~2-8 ms [Frame Delay]"
-        $spikeSeverity = "LOW"
-    } elseif ($modId -match "RealisticDash|YourDash" -or $modName -match "Realistic Dashboard|Gauges") {
-        $spikeMs = "~5-15 ms [Minor Blip]"
-        $spikeSeverity = "LOW"
-    } elseif ($modId -match "PushVehicle" -or $modName -match "Push Vehicle") {
-        $spikeMs = "~5-15 ms [Minor Blip]"
-        $spikeSeverity = "LOW"
-    } elseif ($modId -match "DynamicGearRattling|GearRattling" -or $modName -match "Gear Rattling") {
-        $spikeMs = "~5-15 ms [Minor Blip]"
-        $spikeSeverity = "LOW"
-    } elseif ($modId -match "ALifeThreatAlert|ThreatAlert|ThreatDetector" -or $modName -match "Threat Detector") {
-        $spikeMs = "~5-15 ms [Minor Blip]"
-        $spikeSeverity = "LOW"
-    } elseif ($modId -match "NeatLockpicking|Lockpick" -or $modName -match "Lockpicking") {
-        $spikeMs = "~5-15 ms [Minor Blip]"
-        $spikeSeverity = "LOW"
-    } elseif ($modId -match "Construction1PViewpoint" -or $modName -match "Construction 1P") {
-        $spikeMs = "~5-15 ms [Minor Blip]"
-        $spikeSeverity = "LOW"
-    } elseif ($modId -match "P4TidyUpMeister|TidyUpMeister" -or $modName -match "Tidy Up Meister") {
-        $spikeMs = "~5-15 ms [Minor Blip]"
-        $spikeSeverity = "LOW"
-    } elseif ($modId -match "traitsAsSkills" -or $modName -match "Traits As Skills") {
-        $spikeMs = "~5-15 ms [Minor Blip]"
-        $spikeSeverity = "LOW"
-    } elseif ($modId -match "ControllerSupport|Joypad" -or $modName -match "Controller Support") {
-        $spikeMs = "~5-15 ms [Minor Blip]"
-        $spikeSeverity = "LOW"
-    } elseif ($modId -match "PZ_Pulse|PZPulse" -or $modName -match "PZ Pulse") {
-        $spikeMs = "~5-15 ms [Minor Blip]"
-        $spikeSeverity = "LOW"
-    } elseif ($modId -match "MoreDamagedObjects" -or $modName -match "More Damaged Objects") {
-        $spikeMs = "~5-15 ms [Minor Blip]"
-        $spikeSeverity = "LOW"
-    } elseif ($modId -eq "ZombieBuddy" -or $modName -eq "ZombieBuddy") {
-        $spikeMs = "< 1 ms [Imperceptible]"
-        $spikeSeverity = "NEGLIGIBLE"
-    } elseif ($modId -match "ViewpointTrueWeathers$" -or $modName -match "True Weathers & Lighting") {
-        $spikeMs = "~10-30 ms [Weather Shader / Lighting Pass]"
-        $spikeSeverity = "MODERATE"
-    } elseif ($modId -match "NearVegetation|TREE in 3D" -or $modName -match "TREE in 3D") {
-        $spikeMs = "~15-35 ms [3D Tree Mesh Frustum Render]"
-        $spikeSeverity = "MODERATE"
-    } elseif ($modId -eq "Viewpoint" -or $modName -eq "Viewpoint") {
-        $spikeMs = "~10-25 ms [1P Render Pass & Camera Transform]"
-        $spikeSeverity = "MODERATE"
-    } elseif ($modId -match "ViewpointTrueBallistics" -or $modName -match "True Ballistics") {
-        $spikeMs = "~10-25 ms [Ballistics Raycast / Trajectory Calc]"
-        $spikeSeverity = "MODERATE"
-    } elseif ($modId -match "ViewpointBloodFX" -or $modName -match "Blood FX for Viewpoint") {
-        $spikeMs = "~10-25 ms [Blood Particle & Lens Splatter]"
-        $spikeSeverity = "MODERATE"
-    } elseif ($modId -match "ViewpointAdvancedThrowables" -or $modName -match "Advanced Throwables") {
-        $spikeMs = "~5-15 ms [Action Blip: Throwable Physics]"
-        $spikeSeverity = "LOW"
-    } elseif ($modId -match "ProjectViewpointADS" -or $modName -match "Recoil & ADS") {
-        $spikeMs = "~5-15 ms [Action Blip: Recoil & ADS Calc]"
-        $spikeSeverity = "LOW"
-    } elseif ($modId -match "ViewpointAdvancedMovement" -or $modName -match "Advanced Movement") {
-        $spikeMs = "~5-15 ms [Action Blip: Movement State Calc]"
-        $spikeSeverity = "LOW"
-    } elseif ($modId -match "ViewpointTrueWeathersGameplay" -or $modName -match "True Weathers - Gameplay") {
-        $spikeMs = "~5-15 ms [Weather Sensory Calculation]"
-        $spikeSeverity = "LOW"
-    } elseif ($modId -match "ViewpointDoor" -or $modName -match "Door Fix") {
-        $spikeMs = "~2-8 ms [Door Model Lighting Adjustment]"
-        $spikeSeverity = "LOW"
-    } elseif ($modId -match "ViewpointSurface" -or $modName -match "Surface Fix") {
-        $spikeMs = "~2-8 ms [Surface Mesh Clip Pass]"
-        $spikeSeverity = "LOW"
-    } elseif ($modId -match "ViewpointFences3D" -or $modName -match "3D Fences") {
-        $spikeMs = "~2-8 ms [Fence Mesh Frustum Pass]"
-        $spikeSeverity = "LOW"
-    } elseif ($hasJavaJar) {
-        $spikeMs = "~5-15 ms [Java Engine Extension]"
-        $spikeSeverity = "LOW"
-    } elseif ($throttledHooks -gt 0) {
-        $spikeMs = "~5-15 ms [Minor Blip]"
-        $spikeSeverity = "LOW"
-    } elseif ($permHooks -gt 0) {
-        $spikeMs = "~2-8 ms [Frame Delay]"
-        $spikeSeverity = "LOW"
-    }
-
-    # 2. Continuous & Peak Frame Time Tax (+X.XX ms / frame)
+    # 1. Continuous & Peak Frame Time Tax (+X.XX ms / frame)
     # Queries in permanent per-frame loops run continuously; queries in throttled hooks run periodically
     $javaActiveTax = 0.0
     $javaIdleTax = 0.0
@@ -1099,122 +1227,61 @@ function Get-ModStutterMetrics {
     if ($idleTaxRaw -ge 0.01) { $breakdownParts += "Idle Baseline: +$([math]::Round($idleTaxRaw, 2)) ms" }
     $taxBreakdown = if ($breakdownParts.Count -gt 0) { $breakdownParts -join ", " } else { "Minimal static load" }
 
-    # 3. Stutter Trigger Scenario
-    $trigger = "None (Passive / Static UI)"
-    $optInPrefix = if ($optInModeName) {
-        "Opt-In [$optInModeName]: "
-    } elseif ($isOptInToggle) {
-        "Opt-In Mode: "
-    } else {
-        "Situational: "
-    }
-    if ($modId -match "PZVoxelStudioViewpoint" -or $worldMeshCount -ge 1000) {
-        $trigger = "Chunk Border Traversal & High-Speed Driving (3D Mesh Rebuild)"
-    } elseif ($textureMB -ge 100) {
-        $trigger = "VRAM Texture Streaming & Asset Loading (PCIe Thrashing Risk)"
-    } elseif ($inHookHeavyContainers -ge 1) {
-        if ($isStationaryGated) {
-            $trigger = "$($optInPrefix)When Standing Still / Stationary (Container Rebuild - Zero Movement Hitch)"
-        } elseif ($modName -match "Viewpoint QOL" -or $modId -match "ViewpointQOL") {
-            $trigger = "$($optInPrefix)Moving Near Containers (Backpack Rebuild - Unconstrained Movement Hitch)"
-        } else {
-            $trigger = "$($optInPrefix)While Inventory / Container Grid Open (Backpack & Weight Rebuild)"
+    # 2. Multi-Scenario Trigger Taxonomy Evaluation
+    $allScenarios = Get-ModTriggerScenarios -modId $modId `
+        -modName $modName `
+        -modelCount $modelCount `
+        -worldMeshCount $worldMeshCount `
+        -characterMeshCount $characterMeshCount `
+        -textureMB $textureMB `
+        -totalMB $totalMB `
+        -permHooks $permHooks `
+        -transHooks $transHooks `
+        -throttledHooks $throttledHooks `
+        -inHookWorldQueries $inHookWorldQueries `
+        -inHookInvQueries $inHookInvQueries `
+        -inHookHeavyContainers $inHookHeavyContainers `
+        -inHookUIPolls $inHookUIPolls `
+        -inHookJNICalls $inHookJNICalls `
+        -inHookZombieQueries $inHookZombieQueries `
+        -inHookTileQueries $inHookTileQueries `
+        -isStationaryGated $isStationaryGated `
+        -isOptInToggle $isOptInToggle `
+        -optInModeName $optInModeName `
+        -hasJavaJar $hasJavaJar `
+        -javaJarCount $javaJarCount `
+        -activeTaxRaw $activeTaxRaw `
+        -idleTaxRaw $idleTaxRaw `
+        -isContinuousPolling $isContinuousPolling `
+        -isDormantEarlyExit $isDormantEarlyExit
+
+    $primary = if ($allScenarios.Count -gt 0) { $allScenarios[0] } else {
+        [PSCustomObject]@{
+            ScenarioName = "None (Passive / Static UI)"
+            Impact       = "< 1 ms [Imperceptible]"
+            Severity     = "NEGLIGIBLE"
+            State        = "Passive"
+            Condition    = "None (Passive / Static UI)"
+            Weight       = 5
         }
-    } elseif ($modId -match "ALife|SuperbSurvivors|SubparSurvivors|NPC|Bandits|Humanoid" -or $modName -match "A-Life|Superb Survivors|NPCs|Bandits") {
-        $trigger = if ($permHooks -gt 0) { "Active: Autonomous NPC AI & Sensory Scanning ($permHooks background tick loops)" } else { "Active: Autonomous NPC AI & Sensory Scanning" }
-    } elseif ($inHookZombieQueries -ge 3 -or $modId -match "TrueCrawling|ZombieDismemberment|ZombieAnimation|ZombieCrawl|ZombieCollision") {
-        $trigger = "Horde Proximity & Combat"
-    } elseif ($modId -match "PushDoors|Push Door|CyesPushDoors" -or $modName -match "Push Doors") {
-        $trigger = "Active: Background 25-Tile Door Scanner (~Every 2 Ticks)"
-    } elseif ($modId -match "TakeABath|BathAndShower|Shower|Hygiene" -or $modName -match "Take A Bath|Shower") {
-        $trigger = "Situational: Near Plumbing Fixtures & Bathing Actions (Dormant on Foot)"
-    } elseif ($inHookTileQueries -ge 5) {
-        $trigger = "Situational: Near Interactive World Objects (Tile Scanning)"
-    } elseif ($transHooks -ge 15 -or $modId -match "Journal|Burd") {
-        $trigger = "Action: Transcribing / Reading XP"
-    } elseif ($inHookUIPolls -ge 5 -or ($modName -match "Viewpoint QOL" -and $throttledHooks -gt 0)) {
-        if ($modName -match "Viewpoint QOL" -or $modId -match "ViewpointQOL") {
-            $trigger = "$($optInPrefix)While in Viewpoint (UI Polling & Containers)"
-        } else {
-            $trigger = "$($optInPrefix)While Menu / UI Is Open (High-Frequency UI Polling)"
-        }
-    } elseif ($modId -match "RealisticDash|YourDash" -or $modName -match "Realistic Dashboard|Gauges") {
-        $trigger = "Active: While Inside Vehicle / Driving (Dormant on Foot)"
-    } elseif ($modId -match "PushVehicle" -or $modName -match "Push Vehicle") {
-        $trigger = "Situational: While Pushing a Vehicle (Dormant on Foot)"
-    } elseif ($modId -match "LethalStealth|RET_LethalStealth" -or $modName -match "Lethal Stealth") {
-        $trigger = "Situational: While Sneaking / In Stealth Stance (Dormant when Upright)"
-    } elseif ($modId -match "DynamicGearRattling|GearRattling" -or $modName -match "Gear Rattling") {
-        $trigger = "Situational: While Jogging / Moving on Foot (Gear Audio)"
-    } elseif ($modId -match "ALifeThreatAlert|ThreatAlert|ThreatDetector" -or $modName -match "Threat Detector") {
-        $trigger = "Situational: Threat Proximity & Hostile Alerts"
-    } elseif ($modId -match "NeatLockpicking|Lockpick" -or $modName -match "Lockpicking") {
-        $trigger = "Situational: While Lockpicking / Mini-Game Active"
-    } elseif ($modId -match "Construction1PViewpoint" -or $modName -match "Construction 1P") {
-        $trigger = "Situational: While Building / Placing Furniture"
-    } elseif ($modId -match "P4TidyUpMeister|TidyUpMeister" -or $modName -match "Tidy Up Meister") {
-        $trigger = "Situational: After Completing Timed Actions (Auto-Stow)"
-    } elseif ($modId -match "traitsAsSkills" -or $modName -match "Traits As Skills") {
-        $trigger = "Situational: Combat & XP Gain / Zombie Kills"
-    } elseif ($modId -match "ControllerSupport|Joypad" -or $modName -match "Controller Support") {
-        $trigger = "Active: Polls Gamepad Every Frame on RenderTick (No Controller Connected)"
-    } elseif ($modId -match "PZ_Pulse|PZPulse" -or $modName -match "PZ Pulse") {
-        $trigger = "Situational: Second-Screen Browser Telemetry (~Every 500ms)"
-    } elseif ($modId -match "MoreDamagedObjects" -or $modName -match "More Damaged Objects") {
-        $trigger = "Situational: Damaged Object Sprites & Water Animations"
-    } elseif ($modId -match "SPNCC" -or $modName -match "Character Customisation") {
-        $trigger = "Situational: Character Creation & Join (One-Time Setup)"
-    } elseif ($modId -match "Equipment|Inventory|Hotbar|Crafting|Menu|Map|Health|DragAndDrop" -or $modName -match "Equipment|Inventory|Hotbar|Crafting|Menu|Map|Health") {
-        $trigger = "Situational: While Menu / UI Is Open"
-    } elseif ($modId -match "LethalStealth|Stealth" -or $modName -match "Lethal Stealth") {
-        $trigger = "Situational: While Sneaking / In Stealth Stance"
-    } elseif ($modId -match "VanillaVehiclesAnimated|Vehicle|jeep|chevy|ford|dodge|nissan|amgeneral|toyota|ferret|oshkosh|corvette|camaro|mustang|volvo|beetle|KI5") {
-        $trigger = "Active: While Driving / Vehicle Streaming"
-    } elseif ($modId -eq "ZombieBuddy" -or $modName -eq "ZombieBuddy") {
-        $trigger = "Passive: JVM Bytecode Transformer Engine (Launch-Time Injection - Zero Gameplay Tick Tax)"
-    } elseif ($modId -eq "Viewpoint" -or $modName -eq "Viewpoint") {
-        $trigger = "Opt-In [First-Person Mode]: 1P Camera Matrix & In-Engine Render Pass (Active in 1P / Dormant in 3P)"
-    } elseif ($modId -match "ViewpointTrueWeathers$" -or $modName -match "True Weathers & Lighting") {
-        $trigger = "Situational: During Heavy Storms, Fog & Lightning (Dormant in Clear Weather)"
-    } elseif ($modId -match "ViewpointTrueWeathersGameplay" -or $modName -match "True Weathers - Gameplay") {
-        $trigger = "Situational: Storm / Fog Weather Zombie Sensory Modifiers (Dormant in Clear Weather)"
-    } elseif ($modId -match "NearVegetation|TREE in 3D" -or $modName -match "TREE in 3D") {
-        $trigger = "Situational: Near Forests & Dense Vegetation (3D Trees - Dormant in Clear Areas)"
-    } elseif ($modId -match "ViewpointAdvancedThrowables" -or $modName -match "Advanced Throwables") {
-        $trigger = "Situational: While Aiming / Throwing Projectiles (Dormant on Foot)"
-    } elseif ($modId -match "ProjectViewpointADS" -or $modName -match "Recoil & ADS") {
-        $trigger = "Situational: While Aiming Down Sights (ADS) & Firing (Dormant Idle)"
-    } elseif ($modId -match "ViewpointTrueBallistics" -or $modName -match "True Ballistics") {
-        $trigger = "Situational: While Firing Firearms (Projectile Raycasts - Dormant Idle)"
-    } elseif ($modId -match "ViewpointBloodFX" -or $modName -match "Blood FX for Viewpoint") {
-        $trigger = "Situational: Combat Hits & Zombie Damage (Blood FX - Dormant Out of Combat)"
-    } elseif ($modId -match "ViewpointAdvancedMovement" -or $modName -match "Advanced Movement") {
-        $trigger = "Situational: While Leaning, Prone, Crawling or Vaulting (Dormant Walking)"
-    } elseif ($modId -match "ViewpointDoor" -or $modName -match "Door Fix") {
-        $trigger = "Situational: Near Doors & Doorway Transitions (Dormant Away from Doors)"
-    } elseif ($modId -match "ViewpointSurface" -or $modName -match "Surface Fix") {
-        $trigger = "Situational: Indoors & Multi-Story Roof Surfaces (Dormant Outdoors)"
-    } elseif ($modId -match "ViewpointFences3D" -or $modName -match "3D Fences") {
-        $trigger = "Situational: Near 3D Fences (Frustum Render)"
-    } elseif ($hasJavaJar) {
-        $trigger = "Situational: Native Java Engine Extension (Dormant Unless Interacting)"
-    } elseif ($permHooks -ge 1) {
-        $trigger = if ($isContinuousPolling) { "Active: Continuous Engine Hook (Every Single Frame)" } else { "Dormant: Hook Registered (Early Return Unless Active)" }
-    } elseif ($throttledHooks -ge 1) {
-        $trigger = "Periodic Timer (~Every 5-10s)"
     }
+    $secondary = @($allScenarios | Select-Object -Skip 1)
 
     return [PSCustomObject]@{
-        PotentialSpike = $spikeMs
-        FrameTax = $taxText
-        TaxBreakdown = $taxBreakdown
-        StutterTrigger = $trigger
-        SpikeSeverity = $spikeSeverity
-        ActiveTaxRaw = $activeTaxRaw
-        IdleTaxRaw = $idleTaxRaw
+        PotentialSpike      = $primary.Impact
+        FrameTax            = $taxText
+        TaxBreakdown        = $taxBreakdown
+        StutterTrigger      = $primary.Condition
+        SpikeSeverity       = $primary.Severity
+        ActiveTaxRaw        = $activeTaxRaw
+        IdleTaxRaw          = $idleTaxRaw
         IsContinuousPolling = $isContinuousPolling
-        IsDormantEarlyExit = $isDormantEarlyExit
-        LoopNature = $loopNature
+        IsDormantEarlyExit  = $isDormantEarlyExit
+        LoopNature          = $loopNature
+        AllScenarios        = @($allScenarios)
+        PrimaryScenario     = $primary
+        SecondaryScenarios  = @($secondary)
+        ScenarioCount       = $allScenarios.Count
     }
 }
 
@@ -1282,7 +1349,7 @@ function Build-FreezeCluster($frames) {
 # ==============================================================================
 function Invoke-PZScanEngine([string]$CustomServerIni = "", [switch]$LocalWorkshopOnly, [string]$CustomWorkshopPath = "", [string]$CustomLog = "") {
     Write-Host "`n=================================================================" -ForegroundColor Cyan
-    Write-Host "   PROJECT ZOMBOID MOD PERFORMANCE & OPTIMIZATION SUITE v2.15.0 " -ForegroundColor Yellow
+    Write-Host "   PROJECT ZOMBOID MOD PERFORMANCE & OPTIMIZATION SUITE v2.16.0 " -ForegroundColor Yellow
     Write-Host "         Created by @KodeMannn with the help of Gemini          " -ForegroundColor DarkCyan
     Write-Host "=================================================================`n" -ForegroundColor Cyan
 
@@ -1758,7 +1825,8 @@ function Invoke-PZScanEngine([string]$CustomServerIni = "", [switch]$LocalWorksh
             -inHookZombieQueries $inHookZombieQueries `
             -inHookTileQueries $inHookTileQueries `
             -hasJavaJar $hasJavaJar `
-            -javaJarCount $javaJarCount
+            -javaJarCount $javaJarCount `
+            -characterMeshCount $characterMeshCount
 
         $modReports += [PSCustomObject]@{
             ModId = $modId
@@ -1799,6 +1867,10 @@ function Invoke-PZScanEngine([string]$CustomServerIni = "", [switch]$LocalWorksh
             IsContinuousPolling = $stutterMetrics.IsContinuousPolling
             IsDormantEarlyExit = $stutterMetrics.IsDormantEarlyExit
             LoopNature = $stutterMetrics.LoopNature
+            AllScenarios = $stutterMetrics.AllScenarios
+            PrimaryScenario = $stutterMetrics.PrimaryScenario
+            SecondaryScenarios = $stutterMetrics.SecondaryScenarios
+            ScenarioCount = $stutterMetrics.ScenarioCount
             Verdict = $stutterVerdict
             Reasons = ($riskReasons -join "; ")
             HookBreakdown = ($luaSemantics.HookBreakdown -join ", ")
@@ -2779,6 +2851,35 @@ function Invoke-PZScanEngine([string]$CustomServerIni = "", [switch]$LocalWorksh
         } else {
             Write-Host "$trigger" -ForegroundColor $rowColor
         }
+
+        # Multi-Scenario Child Rows (Display each secondary scenario indented underneath)
+        if ($mod.SecondaryScenarios -and $mod.SecondaryScenarios.Count -gt 0) {
+            $sIdx = 1
+            foreach ($sec in $mod.SecondaryScenarios) {
+                $sIdx++
+                $secColor = switch ($sec.Severity) {
+                    "CRITICAL"   { "Red" }
+                    "HIGH"       { "Yellow" }
+                    "MODERATE"   { "DarkYellow" }
+                    "LOW"        { "Cyan" }
+                    Default      { "DarkGray" }
+                }
+
+                $secTitle = "       +-> Scenario $sIdx : $($sec.ScenarioName)"
+                if ($secTitle.Length -gt 39) { $secTitle = $secTitle.Substring(0, 36) + "..." }
+                $secTitlePadded = $secTitle.PadRight(39)
+
+                $secImp = "Impact: $($sec.Impact)"
+                if ($secImp.Length -gt 34) { $secImp = $secImp.Substring(0, 31) + "..." }
+                $secImpPadded = $secImp.PadRight(34)
+
+                Write-Host "$secTitlePadded " -ForegroundColor DarkGray -NoNewline
+                Write-Host "| " -ForegroundColor DarkGray -NoNewline
+                Write-Host "$secImpPadded " -ForegroundColor $secColor -NoNewline
+                Write-Host "| " -ForegroundColor DarkGray -NoNewline
+                Write-Host "$($sec.Condition)" -ForegroundColor DarkGray
+            }
+        }
     }
 
     if ($uninstalledMods.Count -gt 0) {
@@ -2826,7 +2927,7 @@ function Invoke-PZScanEngine([string]$CustomServerIni = "", [switch]$LocalWorksh
     $md = @()
     $md += "# Project Zomboid Mod Performance & Optimization Diagnostic Report"
     $hostName = if ($env:COMPUTERNAME) { $env:COMPUTERNAME } elseif ($env:HOSTNAME) { $env:HOSTNAME } else { [System.Net.Dns]::GetHostName() }
-    $md += "*Generated: $(Get-Date -Format 'yyyy-MM-dd HH:mm:ss') on $hostName by PZ-Mod-Performance-Suite v2.15.0 (Coded with the help of Google Gemini)*"
+    $md += "*Generated: $(Get-Date -Format 'yyyy-MM-dd HH:mm:ss') on $hostName by PZ-Mod-Performance-Suite v2.16.0 (Coded with the help of Google Gemini)*"
     $md += ""
     $md += "## Executive Summary"
     $md += "- **Game Version:** $pzVersion"
@@ -3117,6 +3218,17 @@ function Invoke-PZScanEngine([string]$CustomServerIni = "", [switch]$LocalWorksh
             if ($c.Reasons) {
                 $md += "- **Diagnostic Details:** $($c.Reasons)"
             }
+            if ($c.AllScenarios -and $c.AllScenarios.Count -gt 0) {
+                $md += ""
+                $md += "#### Operational Trigger Scenarios & Performance Impact Matrix"
+                $md += "| # | Operational Trigger Scenario | Performance Impact | Severity | Execution State | Trigger Condition |"
+                $md += "|:---:|:---|:---:|:---:|:---:|:---|"
+                $sNum = 0
+                foreach ($sc in $c.AllScenarios) {
+                    $sNum++
+                    $md += "| **$sNum** | $($sc.ScenarioName) | **$($sc.Impact)** | **$($sc.Severity)** | $($sc.State) | $($sc.Condition) |"
+                }
+            }
             $md += ""
         }
     } else {
@@ -3127,11 +3239,16 @@ function Invoke-PZScanEngine([string]$CustomServerIni = "", [switch]$LocalWorksh
     $md += "---"
     $md += "## All Active Mods Ranked by Performance Impact"
     $md += ""
-    $md += "| Mod Name | Mod ID | Tier | Score | Predicted Risk (Heuristic) | Frame Tax | Trigger Scenario | Perm Loops | Trans / Throt | Queries (Hook/UI) | Size (MB) | World Meshes | Stutter Verdict |"
+    $md += "| Mod Name | Mod ID | Tier | Score | Primary Impact | Frame Tax | All Operational Trigger Scenarios & Impacts | Perm Loops | Trans / Throt | Queries (Hook/UI) | Size (MB) | World Meshes | Stutter Verdict |"
     $md += "|:---|:---|:---:|:---:|:---:|:---:|:---|:---:|:---:|:---:|:---:|:---:|:---|"
     foreach ($m in $sortedMods) {
         $mId = $m.ModId
-        $md += "| $($m.ModName) | $mId | $($m.Tier) | $($m.RiskScore) | $($m.PotentialSpike) | $($m.FrameTax) | $($m.StutterTrigger) | $($m.PermanentHooks) | $($m.TransientHooks) / $($m.ThrottledHooks) | $($m.InHookWorldQueries) / $($m.StaticWorldQueries) | $($m.SizeMB) | $($m.WorldMeshCount) | $($m.Verdict) |"
+        $scFormatted = if ($m.AllScenarios -and $m.AllScenarios.Count -gt 0) {
+            ($m.AllScenarios | ForEach-Object { "**$($_.ScenarioName)**: $($_.Impact) *($($_.State))* - $($_.Condition)" }) -join "<br/>"
+        } else {
+            $m.StutterTrigger
+        }
+        $md += "| $($m.ModName) | $mId | $($m.Tier) | $($m.RiskScore) | $($m.PotentialSpike) | $($m.FrameTax) | $scFormatted | $($m.PermanentHooks) | $($m.TransientHooks) / $($m.ThrottledHooks) | $($m.InHookWorldQueries) / $($m.StaticWorldQueries) | $($m.SizeMB) | $($m.WorldMeshCount) | $($m.Verdict) |"
     }
 
     if ($collisions.Count -gt 0) {
@@ -3191,7 +3308,7 @@ function Show-PZMainMenu {
     while ($true) {
         Clear-Host
         Write-Host "=================================================================" -ForegroundColor Cyan
-        Write-Host "   PROJECT ZOMBOID MOD PERFORMANCE & OPTIMIZATION SUITE v2.15.0 " -ForegroundColor Yellow
+        Write-Host "   PROJECT ZOMBOID MOD PERFORMANCE & OPTIMIZATION SUITE v2.16.0 " -ForegroundColor Yellow
         Write-Host "         Created by @KodeMannn with the help of Gemini          " -ForegroundColor DarkCyan
         Write-Host "=================================================================" -ForegroundColor Cyan
         Write-Host "  [1] Run Full Performance Diagnostic Scan (Active Save)" -ForegroundColor White
