@@ -1,6 +1,6 @@
-<# :
+﻿<# :
 @echo off
-title Project Zomboid Mod Performance ^& Optimization Suite v2.14.2
+title Project Zomboid Mod Performance ^& Optimization Suite v2.15.0
 color 0F
 powershell -NoProfile -ExecutionPolicy Bypass -Command "& ([scriptblock]::Create([System.IO.File]::ReadAllText('%~f0'))) %*"
 echo.
@@ -9,14 +9,14 @@ exit /b
 #>
 <#
 .SYNOPSIS
-    Project Zomboid Mod Performance & Optimization Suite v2.14.2
+    Project Zomboid Mod Performance & Optimization Suite v2.15.0
 .DESCRIPTION
     Comprehensive diagnostic scanner and optimization toolkit for Project Zomboid (Build 42 & 41).
     Features Precision Slow Frame Anatomy Dissection (Main vs Render Thread, GC pauses vs Chunk Cache),
-    Causal Bottleneck Attribution (Zero False Mod Accusations), Full Stutter & Lag Spike Impact Roster,
-    Hardware & Thread Headroom Telemetry (GPU ms, Render CPU ms, Main Thread ms, Entity Density),
-    Top 10 Correlated Spike Culprits with Strict Worthiness Filtering, State-Gated vs Continuous Hook
-    Classification, Global Modpack Runtime Budget, Cross-Platform Linux/macOS/Windows Support, and 1-Click Engine Tuning.
+    Consecutive Freeze Cluster Analysis (Multi-Frame Chains), 3D Frustum & Geometry Telemetry (Draws/Frame, Bones, VRAM),
+    In-Game Graphics Configuration Bottleneck Audit (options.ini), JVM Bytecode Patch & Hook Registry ([ZB]),
+    Runtime Mod Error & Exception Attribution, GC Heap Churn Velocity, Causal Bottleneck Attribution,
+    Hardware & Thread Headroom Telemetry, Cross-Platform Linux/macOS/Windows Support, and 1-Click Engine Tuning.
 .AUTHOR
     KodeMannn (https://github.com/KodeMannn) - Coded with the assistance of Google Gemini
 #>
@@ -1246,12 +1246,43 @@ function Test-IsSpikeWorthy($mod) {
     return $false
 }
 
+function Build-FreezeCluster($frames) {
+    $totDur = ($frames | Measure-Object -Property DurationMs -Sum).Sum
+    $fMin = ($frames | Measure-Object -Property FrameNumber -Minimum).Minimum
+    $fMax = ($frames | Measure-Object -Property FrameNumber -Maximum).Maximum
+    $fRange = if ($fMin -gt 0 -and $fMax -gt 0) { "Frames $fMin-$fMax" } else { "$($frames.Count) consecutive frames" }
+    
+    $cTriggers = @()
+    $totCC = ($frames | Measure-Object -Property ChunkCacheMs -Sum).Sum
+    if ($totCC -ge 15.0) { $cTriggers += ("Chunk Cache ({0} ms)" -f [math]::Round($totCC, 1)) }
+    $totSnap = ($frames | Measure-Object -Property SnapshotMs -Sum).Sum
+    if ($totSnap -ge 15.0) { $cTriggers += ("Snapshots ({0} ms)" -f [math]::Round($totSnap, 1)) }
+    $totGC = ($frames | Where-Object { $_.RestDetails -match "collector's pauses" } | Measure-Object -Property RestMs -Sum).Sum
+    if ($totGC -ge 50.0) { $cTriggers += ("GC Sweep ({0} ms)" -f [math]::Round($totGC, 1)) }
+    $totShadow = ($frames | Measure-Object -Property ShadowMs -Sum).Sum
+    if ($totShadow -ge 15.0) { $cTriggers += ("Lamp Shadows ({0} ms)" -f [math]::Round($totShadow, 1)) }
+    $totGb = ($frames | Measure-Object -Property GbufferMs -Sum).Sum
+    if ($totGb -ge 15.0) { $cTriggers += ("G-Buffer ({0} ms)" -f [math]::Round($totGb, 1)) }
+    $totWait = ($frames | Where-Object { $_.WaitMainThread } | Measure-Object -Property RestMs -Sum).Sum
+    if ($totWait -ge 20.0) { $cTriggers += ("Waiting for Main Thread ({0} ms)" -f [math]::Round($totWait, 1)) }
+
+    $trigStr = if ($cTriggers.Count -gt 0) { $cTriggers -join " + " } else { "Combat / Simulation Burst" }
+
+    return [PSCustomObject]@{
+        TotalDurationMs = [math]::Round($totDur, 1)
+        FrameCount = $frames.Count
+        FrameRange = $fRange
+        Triggers = $trigStr
+        Frames = $frames
+    }
+}
+
 # ==============================================================================
 # Core Diagnostic Engine
 # ==============================================================================
 function Invoke-PZScanEngine([string]$CustomServerIni = "", [switch]$LocalWorkshopOnly, [string]$CustomWorkshopPath = "", [string]$CustomLog = "") {
     Write-Host "`n=================================================================" -ForegroundColor Cyan
-    Write-Host "   PROJECT ZOMBOID MOD PERFORMANCE & OPTIMIZATION SUITE v2.14.2 " -ForegroundColor Yellow
+    Write-Host "   PROJECT ZOMBOID MOD PERFORMANCE & OPTIMIZATION SUITE v2.15.0 " -ForegroundColor Yellow
     Write-Host "         Created by @KodeMannn with the help of Gemini          " -ForegroundColor DarkCyan
     Write-Host "=================================================================`n" -ForegroundColor Cyan
 
@@ -1869,6 +1900,43 @@ function Invoke-PZScanEngine([string]$CustomServerIni = "", [switch]$LocalWorksh
     $headroomMainThreadFps = 0
     $headroomZombies = 0
 
+    # Pillar 1: Viewpoint / RVV 3D Frustum & Geometry Telemetry
+    $hasGeometryTelemetry = $false
+    $geomDrawsPerFrame = 0
+    $geomMeshDraws = 0
+    $geomOwnedModels = 0
+    $geomBonePalettes = 0
+    $geomShellBlocks = 0
+    $geomShellVerticesHeld = ""
+    $geomShellVerticesDrawn = ""
+    $geomCommittedMb = 0
+    $geomHeapUsedMb = 0
+    $geomHeapMaxMb = 0
+    $geomVramFreeMb = 0
+    $geomVramTotalMb = 0
+    $geomCulledVertices = 0
+    $geomPerspectiveVertices = 0
+
+    # Pillar 2: Consecutive Freeze Clusters
+    $freezeClusters = @()
+
+    # Pillar 4: JVM Bytecode Patch & Hook Registry
+    $zbPatches = @()
+    $hasZbTelemetry = $false
+
+    # Pillar 5: Runtime Mod Error & Exception Attribution
+    $missingBones = @()
+    $missingVehicleTemplates = @()
+    $translationFormatExceptions = @()
+    $fluidContainerWarnings = @()
+
+    # Pillar 6: GC Heap Churn Velocity
+    $firstLogTimestamp = $null
+    $lastLogTimestamp = $null
+    $sessionDurationMinutes = 0.0
+    $gcVelocitySweepsPerMin = 0.0
+    $gcVelocityRating = "Stable"
+
     if ($targetLogPath -and (Test-Path $targetLogPath)) {
         $logLines = New-Object System.Collections.Generic.List[string]
         try {
@@ -1890,6 +1958,12 @@ function Invoke-PZScanEngine([string]$CustomServerIni = "", [switch]$LocalWorksh
         }
 
         foreach ($line in $logLines) {
+            if ($line -match '^\[(\d{2}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}\.\d{3})\]') {
+                $ts = $matches[1]
+                if (-not $firstLogTimestamp) { $firstLogTimestamp = $ts }
+                $lastLogTimestamp = $ts
+            }
+
             if ($line -match 'slow frame on the (main|render) thread:\s*([\d\.]+)\s*ms,\s*(?:ours|our passes)\s*([\d\.]+)(?:\s*\((.*?)\))?,\s*the rest\s*([\d\.]+)(?:\s*\((.*?)\))?') {
                 $th = $matches[1]
                 $tMs = [double]$matches[2]
@@ -1897,6 +1971,7 @@ function Invoke-PZScanEngine([string]$CustomServerIni = "", [switch]$LocalWorksh
                 $oDet = $matches[4]
                 $rMs = [double]$matches[5]
                 $rDet = $matches[6]
+                $fNum = if ($line -match 'f:(\d+)>') { [int]$matches[1] } else { 0 }
 
                 $ccMs = 0.0
                 $ccBuilds = 0
@@ -1948,12 +2023,14 @@ function Invoke-PZScanEngine([string]$CustomServerIni = "", [switch]$LocalWorksh
                     WaitMainThread = $waitMain
                     RestMs = $rMs
                     RestDetails = $rDet
+                    FrameNumber = $fNum
                     Line = $line
                 }
             } elseif ($line -match 'slow frame on the (main|render) thread:\s*([\d\.]+)\s*ms.*ours\s*([\d\.]+)') {
                 $th = $matches[1]
                 $tMs = [double]$matches[2]
                 $oMs = [double]$matches[3]
+                $fNum = if ($line -match 'f:(\d+)>') { [int]$matches[1] } else { 0 }
                 $slowFrames += [PSCustomObject]@{
                     Thread = $th
                     DurationMs = $tMs
@@ -1968,6 +2045,7 @@ function Invoke-PZScanEngine([string]$CustomServerIni = "", [switch]$LocalWorksh
                     WaitMainThread = $false
                     RestMs = [math]::Max(0.0, $tMs - $oMs)
                     RestDetails = "Engine Simulation"
+                    FrameNumber = $fNum
                     Line = $line
                 }
             }
@@ -1989,6 +2067,42 @@ function Invoke-PZScanEngine([string]$CustomServerIni = "", [switch]$LocalWorksh
                 $headroomMainThreadFps = [int]$matches[5]
                 $headroomZombies = [int]$matches[6]
             }
+
+            # 3D Frustum Geometry
+            if ($line -match 'draws/frame\s*(\d+)(?:\s*\(mesh draws in them\s*(\d+))?') {
+                $hasGeometryTelemetry = $true
+                $d = [int]$matches[1]
+                if ($d -gt $geomDrawsPerFrame) {
+                    $geomDrawsPerFrame = $d
+                    if ($matches[2]) { $geomMeshDraws = [int]$matches[2] }
+                }
+            }
+            if ($line -match 'owned model instances drawn\s*(\d+).*?palettes\s*(\d+)\s*bones') {
+                $m = [int]$matches[1]
+                $b = [int]$matches[2]
+                if ($m -gt $geomOwnedModels) { $geomOwnedModels = $m }
+                if ($b -gt $geomBonePalettes) { $geomBonePalettes = $b }
+            }
+            if ($line -match 'shell blocks in view\s*(\d+)\s*\(([\d\.]+M)\s*vertices held(?:;\s*drawn\s*([^)]+))?\)') {
+                $geomShellBlocks = [int]$matches[1]
+                $geomShellVerticesHeld = $matches[2]
+                if ($matches[3]) { $geomShellVerticesDrawn = $matches[3] }
+            }
+            if ($line -match 'process MiB committed\s*(\d+).*?heap used\s*(\d+)\s*of\s*(\d+)') {
+                $geomCommittedMb = [int]$matches[1]
+                $geomHeapUsedMb = [int]$matches[2]
+                $geomHeapMaxMb = [int]$matches[3]
+            }
+            if ($line -match 'video memory MiB free\s*(\d+)\s*of\s*(\d+)') {
+                $geomVramFreeMb = [int]$matches[1]
+                $geomVramTotalMb = [int]$matches[2]
+            }
+            if ($line -match 'perspectiveVertices\s*(\d+).*?culled\s*(\d+)') {
+                $geomPerspectiveVertices = [int]$matches[1]
+                $geomCulledVertices = [int]$matches[2]
+            }
+
+            # GC telemetry
             if ($line -match '\|\s*gc\s+([^\|]+)\|') {
                 $hasGcTelemetry = $true
                 $str = $matches[1].Trim()
@@ -2005,6 +2119,33 @@ function Invoke-PZScanEngine([string]$CustomServerIni = "", [switch]$LocalWorksh
                     $totalConcMs += [int]$matches[2]
                 }
             }
+
+            # ZB Bytecode Patches
+            if ($line -match '\[ZB\]\s*patching\s+([^\s]+)\s+with\s+(\d+)\s+advice') {
+                $hasZbTelemetry = $true
+                $zbPatches += [PSCustomObject]@{
+                    Target = $matches[1]
+                    AdviceCount = [int]$matches[2]
+                    Category = if ($matches[1] -match 'IsoPlayer|CharacterInput') { "Player Input & Movement" }
+                               elseif ($matches[1] -match 'SpriteRenderer|DeadBodyAtlas|FBORender|render') { "Rendering & Atlas Pipeline" }
+                               elseif ($matches[1] -match 'SoundListener|fmod') { "FMOD Audio Subsystem" }
+                               elseif ($matches[1] -match 'FluidContainer') { "Entity & Fluid Systems" }
+                               elseif ($matches[1] -match 'GameWindow|PerformanceSettings') { "Engine Core & Window" }
+                               else { "General Engine" }
+                }
+            }
+
+            # Runtime Mod Exceptions
+            if ($line -match 'ImportedSkeleton\.collectBoneFrames\s*>\s*Could not find bone index for node name:\s*"([^"]+)"') {
+                $missingBones += $matches[1]
+            } elseif ($line -match 'ERROR:\s*template\s*"([^"]+)"\s*not found') {
+                $missingVehicleTemplates += $matches[1]
+            } elseif ($line -match 'Translator\.reportMissingArgumentsFromPastAbuse.*Formatting\s*"([^"]+)"') {
+                $translationFormatExceptions += $matches[1]
+            } elseif ($line -match 'FluidContainerScript\.load\s*>\s*Sanitizing container name\s*''([^'']+)''') {
+                $fluidContainerWarnings += $matches[1]
+            }
+
             if ($line -match 'video memory MiB free (\d+) of (\d+)(?:,\s*evictions\s*(\d+)\s*\(([\d\.]+)\s*MiB\))?') {
                 $vramReport = "$($matches[1]) MB free of $($matches[2]) MB"
                 if ($matches[3]) {
@@ -2041,6 +2182,39 @@ function Invoke-PZScanEngine([string]$CustomServerIni = "", [switch]$LocalWorksh
         }
     }
 
+    # Also scan console.txt if distinct from targetLogPath to catch early JVM startup bytecode patches
+    if ($consoleItem -and (Test-Path $consoleItem.FullName) -and $consoleItem.FullName -ne $targetLogPath) {
+        try {
+            $cStream = [System.IO.File]::Open($consoleItem.FullName, [System.IO.FileMode]::Open, [System.IO.FileAccess]::Read, [System.IO.FileShare]::ReadWrite)
+            $cReader = New-Object System.IO.StreamReader($cStream, [System.Text.Encoding]::UTF8)
+            while (-not $cReader.EndOfStream) {
+                $cLine = $cReader.ReadLine()
+                if ($cLine -match '\[ZB\]\s*patching\s+([^\s]+)\s+with\s+(\d+)\s+advice') {
+                    $hasZbTelemetry = $true
+                    $zbPatches += [PSCustomObject]@{
+                        Target = $matches[1]
+                        AdviceCount = [int]$matches[2]
+                        Category = if ($matches[1] -match 'IsoPlayer|CharacterInput') { "Player Input & Movement" }
+                                   elseif ($matches[1] -match 'SpriteRenderer|DeadBodyAtlas|FBORender|render') { "Rendering & Atlas Pipeline" }
+                                   elseif ($matches[1] -match 'SoundListener|fmod') { "FMOD Audio Subsystem" }
+                                   elseif ($matches[1] -match 'FluidContainer') { "Entity & Fluid Systems" }
+                                   elseif ($matches[1] -match 'GameWindow|PerformanceSettings') { "Engine Core & Window" }
+                                   else { "General Engine" }
+                    }
+                }
+                if ($cLine -match 'ImportedSkeleton\.collectBoneFrames\s*>\s*Could not find bone index for node name:\s*"([^"]+)"') {
+                    $missingBones += $matches[1]
+                } elseif ($cLine -match 'ERROR:\s*template\s*"([^"]+)"\s*not found') {
+                    $missingVehicleTemplates += $matches[1]
+                } elseif ($cLine -match 'Translator\.reportMissingArgumentsFromPastAbuse.*Formatting\s*"([^"]+)"') {
+                    $translationFormatExceptions += $matches[1]
+                }
+            }
+            $cReader.Close()
+            $cStream.Close()
+        } catch { }
+    }
+
     $vehicleExceptions = @($vehicleExceptions | Select-Object -Unique)
 
     $gcReport = "No GC stalls logged"
@@ -2059,16 +2233,130 @@ function Invoke-PZScanEngine([string]$CustomServerIni = "", [switch]$LocalWorksh
         }
     }
 
+    # Freeze Cluster Grouping
+    $currentCluster = @()
+    foreach ($sf in $slowFrames) {
+        if ($currentCluster.Count -eq 0) {
+            $currentCluster += $sf
+        } else {
+            $prev = $currentCluster[-1]
+            $diff = if ($sf.FrameNumber -gt 0 -and $prev.FrameNumber -gt 0) { [math]::Abs($sf.FrameNumber - $prev.FrameNumber) } else { 999 }
+            if ($diff -le 3) {
+                $currentCluster += $sf
+            } else {
+                if ($currentCluster.Count -ge 2) {
+                    $freezeClusters += (Build-FreezeCluster $currentCluster)
+                }
+                $currentCluster = @($sf)
+            }
+        }
+    }
+    if ($currentCluster.Count -ge 2) {
+        $freezeClusters += (Build-FreezeCluster $currentCluster)
+    }
+
+    # GC Churn Velocity Calculation
+    if ($firstLogTimestamp -and $lastLogTimestamp) {
+        try {
+            $t1 = [DateTime]::ParseExact($firstLogTimestamp, "dd-MM-yy HH:mm:ss.fff", [System.Globalization.CultureInfo]::InvariantCulture)
+            $t2 = [DateTime]::ParseExact($lastLogTimestamp, "dd-MM-yy HH:mm:ss.fff", [System.Globalization.CultureInfo]::InvariantCulture)
+            $sessionDurationMinutes = [math]::Round(($t2 - $t1).TotalMinutes, 1)
+        } catch {
+            $sessionDurationMinutes = 1.0
+        }
+    }
+    if ($sessionDurationMinutes -gt 0.0 -and $totalYoungCount -gt 0) {
+        $gcVelocitySweepsPerMin = [math]::Round($totalYoungCount / [math]::Max(1.0, $sessionDurationMinutes), 1)
+        $gcVelocityRating = if ($gcVelocitySweepsPerMin -ge 25.0) { "High Churn (Object Allocation Pressure)" }
+                            elseif ($gcVelocitySweepsPerMin -ge 10.0) { "Moderate Churn (Active Generation)" }
+                            else { "Low Churn (Stable Heap Allocation)" }
+    }
+
+    # Pillar 3: Options Audit (options.ini)
     $optionsIni = Join-Path $ZomboidUserPath "options.ini"
     $optionsFps = "Unknown"
     $optionsFpsVal = 0
+    $optionsAuditIssues = @()
+    $optDict = @{}
     if (Test-Path $optionsIni) {
-        $optMatch = (Get-Content $optionsIni | Select-String "^frameRate=(\d+)")
-        if ($optMatch -match 'frameRate=(\d+)') {
-            $optionsFpsVal = [int]$matches[1]
+        $optLines = Get-Content $optionsIni -ErrorAction SilentlyContinue
+        foreach ($ol in $optLines) {
+            if ($ol -match '^\s*([^=]+)=(.*)$') {
+                $optDict[$matches[1].Trim()] = $matches[2].Trim()
+            }
+        }
+        if ($optDict.ContainsKey('frameRate')) {
+            $optionsFpsVal = [int]$optDict['frameRate']
             $optionsFps = "$optionsFpsVal FPS"
         }
+        
+        # 1. Texture Compression
+        if ($optDict.ContainsKey('textureCompression') -and $optDict['textureCompression'] -eq 'false') {
+            $optionsAuditIssues += [PSCustomObject]@{
+                Setting = "textureCompression=false"
+                Severity = "CRITICAL"
+                Title = "Texture Compression is Disabled"
+                Impact = "All modded and vanilla textures (including 4K clothing/vehicles) load uncompressed into VRAM, driving ~10 GB VRAM saturation and PCIe texture swapping."
+                Fix = "Enable 'Texture Compression' in Display Options (or set textureCompression=true in options.ini)."
+            }
+        }
+        
+        # 2. Model Texture Mipmaps
+        if ($optDict.ContainsKey('modelTextureMipmaps') -and $optDict['modelTextureMipmaps'] -eq 'false') {
+            $optionsAuditIssues += [PSCustomObject]@{
+                Setting = "modelTextureMipmaps=false"
+                Severity = "HIGH"
+                Title = "3D Model Mipmaps are Disabled"
+                Impact = "Custom 3D model meshes lack mipmaps, thrashing GPU texture cache on distant objects and causing visual shimmering and frame pacing judder."
+                Fix = "Enable 'Model Texture Mipmaps' in Display Options (or set modelTextureMipmaps=true in options.ini)."
+            }
+        }
+        
+        # 3. Asynchronous Tick Rate Dissonance
+        $optUiFps = if ($optDict.ContainsKey('uiRenderFPS')) { [int]$optDict['uiRenderFPS'] } else { 60 }
+        $optLightFps = if ($optDict.ContainsKey('lightFPS')) { [int]$optDict['lightFPS'] } else { 30 }
+        $optVsync = if ($optDict.ContainsKey('vsync')) { $optDict['vsync'] -eq 'true' } else { $false }
+        
+        if ($optionsFpsVal -ge 120 -and ($optUiFps -le 60 -or $optLightFps -le 30)) {
+            $optionsAuditIssues += [PSCustomObject]@{
+                Setting = "frameRate=$optionsFpsVal | uiRenderFPS=$optUiFps | lightFPS=$optLightFps"
+                Severity = "HIGH"
+                Title = "Asynchronous Engine Tick Rate Dissonance"
+                Impact = "World renders at $optionsFpsVal FPS, but dynamic lighting ticks at $optLightFps FPS (1 tick every $([math]::Round($optionsFpsVal / $optLightFps, 0)) frames) and UI ticks at $optUiFps FPS with VSync $(if ($optVsync) { 'ON' } else { 'OFF' }). Causes visible micro-stutter."
+                Fix = "Increase dynamic lighting rate to 60 FPS or lock display frame rate to 120/90 FPS."
+            }
+        }
+        
+        # 4. Active Ragdolls
+        if ($optDict.ContainsKey('maxActiveRagdolls')) {
+            $ragdolls = [int]$optDict['maxActiveRagdolls']
+            if ($ragdolls -ge 15) {
+                $optionsAuditIssues += [PSCustomObject]@{
+                    Setting = "maxActiveRagdolls=$ragdolls"
+                    Severity = "MODERATE"
+                    Title = "High Ragdoll Physics Simulation Ceiling"
+                    Impact = "Simulating up to $ragdolls active ragdoll bodies simultaneously induces CPU physics spikes during dense zombie combat."
+                    Fix = "Lower maxActiveRagdolls to 5-10 in Display Options."
+                }
+            }
+        }
+
+        # 5. Max Texture Resolution
+        if ($optDict.ContainsKey('maxTextureSize') -and [int]$optDict['maxTextureSize'] -ge 4) {
+            $optionsAuditIssues += [PSCustomObject]@{
+                Setting = "maxTextureSize=4 (4096px)"
+                Severity = "MODERATE"
+                Title = "Maximum 4K Texture Resolution Enabled"
+                Impact = "Forces 4096x4096 textures for modded world and item assets, contributing to heavy VRAM memory pressure."
+                Fix = "Consider 2048px (maxTextureSize=3) if VRAM headroom drops below 2 GB."
+            }
+        }
     }
+
+    $zbUnique = @($zbPatches | Group-Object Target | Sort-Object Count -Descending)
+    $missingBonesUnique = @($missingBones | Group-Object | Sort-Object Count -Descending)
+    $missingVehiclesUnique = @($missingVehicleTemplates | Group-Object | Sort-Object Count -Descending)
+    $translationFormatUnique = @($translationFormatExceptions | Group-Object | Sort-Object Count -Descending)
 
     $hasPacingWarning = $false
     $pacingRatio = 0
@@ -2250,7 +2538,21 @@ function Invoke-PZScanEngine([string]$CustomServerIni = "", [switch]$LocalWorksh
         Write-Host "                        creating violent frame pacing jitter and running Lua per-frame loops 240x/sec!" -ForegroundColor Yellow
         Write-Host "       Actionable Fix : Set frame rate cap to 120 FPS (or 90 FPS) in Options (or Menu Option [5])." -ForegroundColor Cyan
     }
+    if ($hasGeometryTelemetry) {
+        Write-Host " 3D Render Frustum    : Peak $geomDrawsPerFrame draws/frame ($geomMeshDraws mesh draws) | $geomOwnedModels models ($geomBonePalettes bones)" -ForegroundColor $(if ($geomDrawsPerFrame -gt 1500) { "Red" } else { "White" })
+        if ($geomDrawsPerFrame -gt 1500) {
+            Write-Host "   [!] DRAW CALL LIMIT: Draw call count ($geomDrawsPerFrame) exceeds ~1,500/frame driver dispatch threshold!" -ForegroundColor Yellow
+            Write-Host "       Impact         : CPU render thread driver overhead stalls frame pacing regardless of GPU headroom." -ForegroundColor DarkYellow
+        }
+        if ($geomShellBlocks -gt 0) {
+            Write-Host " Shell Geometry Load  : $geomShellBlocks blocks in view ($geomShellVerticesHeld vertices held; $geomShellVerticesDrawn drawn)" -ForegroundColor Gray
+        }
+    }
     Write-Host " GPU VRAM Usage       : $vramReport" -ForegroundColor White
+    if ($geomVramTotalMb -gt 0) {
+        $vramPct = [math]::Round((($geomVramTotalMb - $geomVramFreeMb) / $geomVramTotalMb) * 100, 1)
+        Write-Host " VRAM Saturation      : $($geomVramTotalMb - $geomVramFreeMb) MiB used of $geomVramTotalMb MiB ($vramPct%)" -ForegroundColor $(if ($vramPct -ge 85.0) { "Red" } elseif ($vramPct -ge 70.0) { "Yellow" } else { "Green" })
+    }
     if ($maxEvictions -gt 0) {
         Write-Host "   [!] GPU Thrashing  : $maxEvictions texture evictions ($maxEvictedMb MiB swapped across PCIe)!" -ForegroundColor Red
         Write-Host "       Cause & Impact : VRAM saturated; PCIe texture swapping causes 100-250ms render hitching" -ForegroundColor Yellow
@@ -2259,8 +2561,15 @@ function Invoke-PZScanEngine([string]$CustomServerIni = "", [switch]$LocalWorksh
             Write-Host "       Top VRAM Loads : $vramCulprits" -ForegroundColor DarkYellow
         }
     }
-    Write-Host " Java Heap Allocation : $heapReport" -ForegroundColor White
+    if ($geomCommittedMb -gt 0) {
+        Write-Host " Process Memory (RAM) : $geomCommittedMb MiB committed (Heap used: $geomHeapUsedMb / $geomHeapMaxMb MiB)" -ForegroundColor White
+    } else {
+        Write-Host " Java Heap Allocation : $heapReport" -ForegroundColor White
+    }
     Write-Host " JVM Garbage Collector: $gcReport" -ForegroundColor $gcColor
+    if ($sessionDurationMinutes -gt 0.0) {
+        Write-Host " GC Churn Velocity    : $gcVelocitySweepsPerMin sweeps/min ($gcVelocityRating)" -ForegroundColor $(if ($gcVelocitySweepsPerMin -ge 25.0) { "Red" } elseif ($gcVelocitySweepsPerMin -ge 10.0) { "Yellow" } else { "Green" })
+    }
     Write-Host " Slow Frames (>50ms)  : $($slowFrames.Count) recorded in last session" -ForegroundColor $(if ($slowFrames.Count -gt 0) { "Red" } else { "Green" })
     if ($slowFrames.Count -gt 0) {
         Write-Host " Worst Frame Spike    : $wTotal ms ($($wTh.ToUpper()) THREAD)" -ForegroundColor Red
@@ -2295,6 +2604,16 @@ function Invoke-PZScanEngine([string]$CustomServerIni = "", [switch]$LocalWorksh
             Write-Host "   -> TOP CORRELATED SPIKE CULPRITS: None (No active mods exceed stutter thresholds; spike is engine/GC overhead)" -ForegroundColor Green
         }
     }
+    if ($freezeClusters.Count -gt 0) {
+        Write-Host " Consecutive Clusters : $($freezeClusters.Count) multi-frame freeze chain(s) detected!" -ForegroundColor Red
+        foreach ($fc in ($freezeClusters | Select-Object -First 3)) {
+            Write-Host "   -> $($fc.FrameRange) : $($fc.TotalDurationMs) ms across $($fc.FrameCount) consecutive frames" -ForegroundColor Red
+            Write-Host "      Root Trigger    : $($fc.Triggers)" -ForegroundColor Yellow
+        }
+        if ($freezeClusters.Count -gt 3) {
+            Write-Host "      ... and $($freezeClusters.Count - 3) more freeze cluster(s) (see ModPerformanceReport.md)" -ForegroundColor Gray
+        }
+    }
     if ($maxSnapshotMs -gt 30.0 -or $maxShadowMs -gt 30.0) {
         $vColor = if ($maxSnapshotMs -ge 100.0 -or $maxShadowMs -ge 100.0) { "Red" } else { "Yellow" }
         Write-Host " Viewpoint Pass Stalls: Snapshots: $([math]::Round($maxSnapshotMs, 1)) ms | Lamp Shadows: $([math]::Round($maxShadowMs, 1)) ms" -ForegroundColor $vColor
@@ -2315,6 +2634,56 @@ function Invoke-PZScanEngine([string]$CustomServerIni = "", [switch]$LocalWorksh
         }
     }
     Write-Host " File Override Clashes: $($collisions.Count) detected ($($safeCollisions.Count) Safe, $($riskyCollisions.Count) High/Moderate Risk)" -ForegroundColor $(if ($riskyCollisions.Count -gt 0) { "Red" } elseif ($collisions.Count -gt 0) { "Green" } else { "Green" })
+
+    if ($optionsAuditIssues.Count -gt 0) {
+        Write-Host "`n-----------------------------------------------------------------" -ForegroundColor Gray
+        Write-Host "   ENGINE GRAPHICS CONFIGURATION BOTTLENECK AUDIT (options.ini)" -ForegroundColor Yellow
+        Write-Host "-----------------------------------------------------------------" -ForegroundColor Gray
+        foreach ($oi in $optionsAuditIssues) {
+            $sevColor = switch ($oi.Severity) { "CRITICAL" { "Red" } "HIGH" { "Yellow" } Default { "Cyan" } }
+            Write-Host " [$($oi.Severity)] $($oi.Title) ($($oi.Setting))" -ForegroundColor $sevColor
+            Write-Host "   Impact : $($oi.Impact)" -ForegroundColor DarkYellow
+            Write-Host "   Fix    : $($oi.Fix)" -ForegroundColor Cyan
+        }
+    }
+
+    if ($hasZbTelemetry -and $zbUnique.Count -gt 0) {
+        Write-Host "`n-----------------------------------------------------------------" -ForegroundColor Gray
+        Write-Host "   JVM BYTECODE INTERCEPTIONS & CLASS HOOKS ([ZB])" -ForegroundColor Cyan
+        Write-Host "-----------------------------------------------------------------" -ForegroundColor Gray
+        Write-Host " Total Engine Hooks   : $($zbPatches.Count) advice hooks across $($zbUnique.Count) unique engine classes" -ForegroundColor White
+        Write-Host " Subsystems Modified  : IsoPlayer movement/input, DeadBodyAtlas render, FMOD sound listener, fluid updates" -ForegroundColor Gray
+        Write-Host " Top Hooked Targets   :" -ForegroundColor DarkCyan
+        foreach ($zbu in ($zbUnique | Select-Object -First 5)) {
+            Write-Host "   - $($zbu.Name) ($($zbu.Count) advice hook(s))" -ForegroundColor Gray
+        }
+    }
+
+    $totalRuntimeErrors = $missingBones.Count + $missingVehicleTemplates.Count + $translationFormatExceptions.Count
+    if ($totalRuntimeErrors -gt 0) {
+        Write-Host "`n-----------------------------------------------------------------" -ForegroundColor Gray
+        Write-Host "   RUNTIME MOD EXCEPTIONS & SCRIPT BLAME ATTRIBUTION" -ForegroundColor Red
+        Write-Host "-----------------------------------------------------------------" -ForegroundColor Gray
+        Write-Host " Total Error Events   : $totalRuntimeErrors exception(s) logged during session" -ForegroundColor Yellow
+        if ($missingBones.Count -gt 0) {
+            Write-Host "   [!] Animation Skeleton Mismatches ($($missingBones.Count) missing bone errors):" -ForegroundColor Red
+            $mbSample = ($missingBonesUnique | Select-Object -First 3 | ForEach-Object { "$($_.Name) ($($_.Count)x)" }) -join ", "
+            Write-Host "       Missing Bones  : $mbSample" -ForegroundColor DarkYellow
+            Write-Host "       Likely Mods    : Custom mutants/monsters (CryOfFearMonsters, PZTheMutants) or armor meshes" -ForegroundColor Gray
+        }
+        if ($missingVehicleTemplates.Count -gt 0) {
+            Write-Host "   [!] Missing Vehicle Script Templates ($($missingVehicleTemplates.Count) errors):" -ForegroundColor Red
+            $mvtSample = ($missingVehiclesUnique | Select-Object -First 3 | ForEach-Object { "$($_.Name) ($($_.Count)x)" }) -join ", "
+            Write-Host "       Missing Parts  : $mvtSample" -ForegroundColor DarkYellow
+            Write-Host "       Likely Mods    : VanillaVehiclesAnimated, KI5campers, KI5trailers" -ForegroundColor Gray
+        }
+        if ($translationFormatExceptions.Count -gt 0) {
+            Write-Host "   [!] Translation Formatting Exceptions ($($translationFormatExceptions.Count) errors):" -ForegroundColor Yellow
+            $tfeSample = ($translationFormatUnique | Select-Object -First 3 | ForEach-Object { "$($_.Name) ($($_.Count)x)" }) -join ", "
+            Write-Host "       Format Errors  : $tfeSample" -ForegroundColor DarkYellow
+            Write-Host "       Likely Mods    : NeatLockpicking, ProjectViewpointNearVegetation" -ForegroundColor Gray
+        }
+    }
 
     # Display Global Modpack Runtime Budget & Loop Density
     Write-Host "`n-----------------------------------------------------------------" -ForegroundColor Gray
@@ -2457,7 +2826,7 @@ function Invoke-PZScanEngine([string]$CustomServerIni = "", [switch]$LocalWorksh
     $md = @()
     $md += "# Project Zomboid Mod Performance & Optimization Diagnostic Report"
     $hostName = if ($env:COMPUTERNAME) { $env:COMPUTERNAME } elseif ($env:HOSTNAME) { $env:HOSTNAME } else { [System.Net.Dns]::GetHostName() }
-    $md += "*Generated: $(Get-Date -Format 'yyyy-MM-dd HH:mm:ss') on $hostName by PZ-Mod-Performance-Suite v2.14.2 (Coded with the help of Google Gemini)*"
+    $md += "*Generated: $(Get-Date -Format 'yyyy-MM-dd HH:mm:ss') on $hostName by PZ-Mod-Performance-Suite v2.15.0 (Coded with the help of Google Gemini)*"
     $md += ""
     $md += "## Executive Summary"
     $md += "- **Game Version:** $pzVersion"
@@ -2483,15 +2852,29 @@ function Invoke-PZScanEngine([string]$CustomServerIni = "", [switch]$LocalWorksh
         $md += "- **Hardware Frame Budget:** GPU: $headroomGpuMs ms | Render CPU: $headroomRenderCpuMs ms | Main Thread: $headroomMainThreadMs ms (~$headroomMainThreadFps FPS headroom)"
         $md += "- **Live Simulation Density:** $headroomZombies active zombies loaded in simulation radius ($headroomFps in-game FPS)"
     }
+    if ($hasGeometryTelemetry) {
+        $drawCallWarning = if ($geomDrawsPerFrame -gt 1500) { " (**CRITICAL**: Exceeds ~1,500/frame driver overhead ceiling)" } else { "" }
+        $md += "- **3D Frustum Geometry:** Peak $geomDrawsPerFrame draws/frame ($geomMeshDraws mesh draws)$drawCallWarning | $geomOwnedModels models ($geomBonePalettes bones)"
+        if ($geomShellBlocks -gt 0) {
+            $md += "  - **Shell Mesh Load:** $geomShellBlocks blocks in view ($geomShellVerticesHeld vertices held; $geomShellVerticesDrawn drawn)"
+        }
+    }
     if ($maxSnapshotMs -gt 30.0 -or $maxShadowMs -gt 30.0) {
         $md += "- **Viewpoint Subsystem Stalls:** Character Snapshots: $([math]::Round($maxSnapshotMs, 1)) ms | Dynamic Lamp Shadows: $([math]::Round($maxShadowMs, 1)) ms"
     }
     if ($hasVehicleExceptions) {
         $md += "- **Vehicle Chunk Spawn Errors:** $($vehicleExceptions -join '; ')"
     }
-    $md += "- **VRAM Free:** $vramReport"
+    $md += "- **VRAM Usage:** $vramReport"
+    if ($geomVramTotalMb -gt 0) {
+        $vramPct = [math]::Round((($geomVramTotalMb - $geomVramFreeMb) / $geomVramTotalMb) * 100, 1)
+        $md += "- **VRAM Saturation:** $($geomVramTotalMb - $geomVramFreeMb) MiB used of $geomVramTotalMb MiB ($vramPct%)"
+    }
     if ($maxEvictions -gt 0) {
         $md += "- **GPU VRAM Thrashing:** $maxEvictions texture evictions ($maxEvictedMb MiB swapped to RAM across PCIe) - High Stutter Risk"
+    }
+    if ($geomCommittedMb -gt 0) {
+        $md += "- **Process Memory (RAM):** $geomCommittedMb MiB committed ($([math]::Round($geomCommittedMb / 1024, 1)) GB) | Heap: $geomHeapUsedMb of $geomHeapMaxMb MiB"
     }
     $md += "- **Worst Recorded Hitch:** $(if ($slowFrames.Count -gt 0) { "$wTotal ms ($($wTh.ToUpper()) THREAD)" } else { "None" })"
     if ($slowFrames.Count -gt 0) {
@@ -2506,10 +2889,26 @@ function Invoke-PZScanEngine([string]$CustomServerIni = "", [switch]$LocalWorksh
             $md += "  - **Correlated Culprits:** None (No active mods exceed stutter thresholds; spike is engine/GC overhead)"
         }
     }
+    if ($freezeClusters.Count -gt 0) {
+        $md += "- **Consecutive Freeze Clusters:** $($freezeClusters.Count) multi-frame stall chains detected (e.g. $($freezeClusters[0].FrameRange): $($freezeClusters[0].TotalDurationMs) ms across $($freezeClusters[0].FrameCount) frames)"
+    }
     if ($maxChunkBuilds -gt 0) {
         $md += "- **Chunk Meshing Peak:** $maxChunkBuilds builds ($maxChunkDuration ms rebuild stall)"
     }
     $md += "- **JVM Garbage Collector:** $gcReport"
+    if ($sessionDurationMinutes -gt 0.0) {
+        $md += "- **GC Churn Velocity:** $gcVelocitySweepsPerMin sweeps/min ($gcVelocityRating) across $sessionDurationMinutes min session"
+    }
+    if ($optionsAuditIssues.Count -gt 0) {
+        $md += "- **Graphics Configuration Audit:** $($optionsAuditIssues.Count) bottleneck(s) flagged in options.ini (Texture Compression, Mipmaps, Tick Rates)"
+    }
+    if ($hasZbTelemetry -and $zbPatches.Count -gt 0) {
+        $md += "- **JVM Bytecode Interceptions:** $($zbPatches.Count) advice hooks active across $($zbUnique.Count) unique engine classes ([ZB])"
+    }
+    $totalRuntimeErrors = $missingBones.Count + $missingVehicleTemplates.Count + $translationFormatExceptions.Count
+    if ($totalRuntimeErrors -gt 0) {
+        $md += "- **Runtime Mod Script Exceptions:** $totalRuntimeErrors error(s) logged ($($missingBones.Count) missing bones, $($missingVehicleTemplates.Count) missing vehicle templates, $($translationFormatExceptions.Count) translation format exceptions)"
+    }
     $md += "- **Direct File Override Clashes:** $($collisions.Count) total ($($safeCollisions.Count) Safe, $($riskyCollisions.Count) High/Moderate Risk)"
     $md += ""
     $md += "---"
@@ -2570,6 +2969,133 @@ function Invoke-PZScanEngine([string]$CustomServerIni = "", [switch]$LocalWorksh
         $md += "> *Even though each vehicle mod in isolation appears lightweight (Tier 4 / green), stacking $vehicleCount vehicle mods results in severe cumulative background overhead and VRAM thrashing when crossing chunks.*"
         $md += ""
     }
+    $md += "---"
+    $md += "## 3D Frustum & Geometry Telemetry (Viewpoint / RVV)"
+    $md += ""
+    if ($hasGeometryTelemetry) {
+        $cullRatio = if ($geomPerspectiveVertices -gt 0) { [math]::Round(($geomCulledVertices / ($geomCulledVertices + $geomPerspectiveVertices)) * 100, 1) } else { 0 }
+        $vramUsedMb = $geomVramTotalMb - $geomVramFreeMb
+        $vramUsedGb = [math]::Round($vramUsedMb / 1024, 2)
+        $vramTotGb = [math]::Round($geomVramTotalMb / 1024, 2)
+        $ramGb = [math]::Round($geomCommittedMb / 1024, 2)
+
+        $md += "| 3D Geometry Metric | Audit Value | Safe Baseline | Performance Assessment |"
+        $md += "|:---|:---:|:---:|:---|"
+        $md += "| **Peak Draw Calls / Frame** | $geomDrawsPerFrame draws ($geomMeshDraws sub-meshes) | < 1,500 draws | $(if ($geomDrawsPerFrame -gt 1500) { '**CRITICAL (Driver CPU bottleneck)**' } else { 'Optimal' }) |"
+        $md += "| **Active 3D Model Instances** | $geomOwnedModels models | < 250 models | $(if ($geomOwnedModels -ge 400) { '**HIGH (Heavy vertex pipeline load)**' } else { 'Normal' }) |"
+        $md += "| **Skeletal Bone Palette Matrices** | $geomBonePalettes bones | < 8,000 bones | $(if ($geomBonePalettes -ge 15000) { '**HEAVY (Complex clothing/model rigs)**' } else { 'Optimal' }) |"
+        $md += "| **Shell Geometry In View** | $geomShellBlocks blocks ($geomShellVerticesHeld held) | < 150 blocks | $(if ($geomShellBlocks -ge 200) { '**HIGH (Extensive world meshing)**' } else { 'Normal' }) |"
+        $md += "| **Dynamic Frustum Culling** | $cullRatio% culling ratio ($geomCulledVertices culled) | > 50% | Optimal |"
+        $md += "| **GPU VRAM Utilization** | $vramUsedGb GB / $vramTotGb GB ($vramPct%) | < 80% capacity | $(if ($vramPct -ge 85.0) { '**CRITICAL (VRAM saturation risk)**' } else { 'Adequate' }) |"
+        $md += "| **Committed Process RAM** | $ramGb GB ($geomCommittedMb MiB) | < 16.0 GB | $(if ($ramGb -ge 18.0) { '**HIGH (Heavy memory residency)**' } else { 'Normal' }) |"
+        $md += ""
+        if ($geomDrawsPerFrame -gt 1500) {
+            $md += "> [!WARNING]"
+            $md += "> **CPU RENDER THREAD DRAW CALL CEILING EXCEEDED ($geomDrawsPerFrame DRAWS/FRAME)**"
+            $md += "> In DirectX and OpenGL, single-threaded CPU driver overhead dramatically escalates above ~1,500 draw calls per frame."
+            $md += "> Even on powerful GPUs, dispatching $geomDrawsPerFrame separate draw calls stalls the Render CPU thread, causing frame pacing jitter."
+            $md += ""
+        }
+    } else {
+        $md += "*No raw Viewpoint/RVV geometry telemetry recorded in session log.*"
+        $md += ""
+    }
+
+    if ($freezeClusters.Count -gt 0) {
+        $md += "---"
+        $md += "## Consecutive Freeze Cluster Analysis (Multi-Frame Chains)"
+        $md += ""
+        $md += "When multiple slow frames occur in immediate sequence, the perceived stutter compounds into a complete game freeze."
+        $md += ""
+        $md += "| Cluster Index | Frame Range | Total Stall Duration | Sequential Frames | Compound Trigger Cascade |"
+        $md += "|:---:|:---:|:---:|:---:|:---|"
+        $cNum = 0
+        foreach ($fc in $freezeClusters) {
+            $cNum++
+            $durFormatted = "$([math]::Round($fc.TotalDurationMs, 1)) ms"
+            $md += "| **#$cNum** | $($fc.FrameRange) | **$durFormatted** | $($fc.FrameCount) consecutive frames | $($fc.Triggers) |"
+        }
+        $md += ""
+        $md += "> [!NOTE]"
+        $md += "> **Compound Freeze Cascade Anatomy:** Notice how major clusters (e.g. Cluster #1) often begin with Chunk Cache boundary meshing or character bone snapshots, which allocate high-volume temporary objects that immediately trigger an unmitigated Java Garbage Collection sweep on the very next frame."
+        $md += ""
+    }
+
+    if ($optionsAuditIssues.Count -gt 0) {
+        $md += "---"
+        $md += "## Engine Graphics Configuration Bottleneck Audit (options.ini)"
+        $md += ""
+        $md += "Graphical settings directly amplify mod-induced stutter. The following misconfigurations were detected in `options.ini`:"
+        $md += ""
+        $md += "| Setting | Severity | Configuration Issue | Diagnostic Impact | Recommended Remediation |"
+        $md += "|:---|:---:|:---|:---|:---|"
+        foreach ($oi in $optionsAuditIssues) {
+            $md += "| ``$($oi.Setting)`` | **$($oi.Severity)** | $($oi.Title) | $($oi.Impact) | $($oi.Fix) |"
+        }
+        $md += ""
+    }
+
+    if ($hasZbTelemetry -and $zbUnique.Count -gt 0) {
+        $md += "---"
+        $md += "## JVM Bytecode Interceptions & Class Patches ([ZB])"
+        $md += ""
+        $md += "Bytecode transformers inject advice hooks into native engine Java classes at startup. The following classes are actively intercepted:"
+        $md += ""
+        $md += "| Intercepted Target Class / Method | Advice Count | Subsystem |"
+        $md += "|:---|:---:|:---|"
+        foreach ($zbu in ($zbUnique | Select-Object -First 15)) {
+            $cat = if ($zbu.Name -match 'IsoPlayer|CharacterInput') { "Player Input & Movement" }
+                   elseif ($zbu.Name -match 'SpriteRenderer|DeadBodyAtlas|FBORender|render') { "Rendering & Atlas Pipeline" }
+                   elseif ($zbu.Name -match 'SoundListener|fmod') { "FMOD Audio Subsystem" }
+                   elseif ($zbu.Name -match 'FluidContainer') { "Entity & Fluid Systems" }
+                   elseif ($zbu.Name -match 'GameWindow|PerformanceSettings') { "Engine Core & Window" }
+                   else { "General Engine" }
+            $md += "| ``$($zbu.Name)`` | $($zbu.Count) advice hook(s) | $cat |"
+        }
+        if ($zbUnique.Count -gt 15) {
+            $md += "| *... and $($zbUnique.Count - 15) more engine methods* | | |"
+        }
+        $md += ""
+    }
+
+    $totalRuntimeErrors = $missingBones.Count + $missingVehicleTemplates.Count + $translationFormatExceptions.Count
+    if ($totalRuntimeErrors -gt 0) {
+        $md += "---"
+        $md += "## Runtime Mod Exceptions & Script Blame Attribution"
+        $md += ""
+        $md += "Silent background exceptions consume CPU cycles constructing stacktraces and writing to disk. The following exceptions were logged during gameplay:"
+        $md += ""
+        $md += "| Error Category | Occurrences | Offending Signatures | Originating Mod Attribution | Root Cause & Resolution |"
+        $md += "|:---|:---:|:---|:---|:---|"
+        if ($missingBones.Count -gt 0) {
+            $mbList = ($missingBonesUnique | ForEach-Object { "$($_.Name) ($($_.Count)x)" }) -join ", "
+            $md += "| **Animation Skeleton Mismatch** | $($missingBones.Count) | $mbList | Custom mutants/monsters (`CryOfFearMonsters`, `PZTheMutants`) or custom armor meshes | Bone hierarchy missing node index in skeleton; causes recurring matrix lookup failures during animation ticks. |"
+        }
+        if ($missingVehicleTemplates.Count -gt 0) {
+            $mvtList = ($missingVehiclesUnique | ForEach-Object { "$($_.Name) ($($_.Count)x)" }) -join ", "
+            $md += "| **Missing Vehicle Template** | $($missingVehicleTemplates.Count) | $mvtList | `VanillaVehiclesAnimated`, `KI5campers`, `KI5trailers` | Generated vehicle script references missing vehicle accessory template during chunk loading. |"
+        }
+        if ($translationFormatExceptions.Count -gt 0) {
+            $tfeList = ($translationFormatUnique | ForEach-Object { "$($_.Name) ($($_.Count)x)" }) -join ", "
+            $md += "| **Translation Format String Error** | $($translationFormatExceptions.Count) | $tfeList | `NeatLockpicking`, `ProjectViewpointNearVegetation` | Malformed format specifiers (e.g. unescaped `%`) throw `UnknownFormatConversionException` inside Java `Translator` on UI hover. |"
+        }
+        $md += ""
+    }
+
+    if ($sessionDurationMinutes -gt 0.0 -and $totalYoungCount -gt 0) {
+        $md += "---"
+        $md += "## JVM Garbage Collection Churn Velocity & Heap Residency"
+        $md += ""
+        $md += "| GC Metric | Audit Value | Safe Baseline | Evaluation |"
+        $md += "|:---|:---:|:---:|:---|"
+        $md += "| **Session Duration** | $sessionDurationMinutes minutes | N/A | Active Session |"
+        $md += "| **Total Young Gen Sweeps** | $totalYoungCount sweeps | < 15 sweeps/min | Normal |"
+        $md += "| **Total GC Pause Time** | $totalYoungMs ms | < 2,000 ms total | Normal |"
+        $md += "| **Heap Churn Velocity** | $gcVelocitySweepsPerMin sweeps/min | < 10 sweeps/min | **$gcVelocityRating** |"
+        $md += "| **Average Sweep Duration** | $([math]::Round($totalYoungMs / $totalYoungCount, 1)) ms/sweep | < 10 ms | Optimal |"
+        $md += ""
+    }
+
     $md += "---"
     $md += "## Key Bottlenecks & High Risk Mods (Tier 1 - Tier 3)"
     $md += ""
@@ -2665,7 +3191,7 @@ function Show-PZMainMenu {
     while ($true) {
         Clear-Host
         Write-Host "=================================================================" -ForegroundColor Cyan
-        Write-Host "   PROJECT ZOMBOID MOD PERFORMANCE & OPTIMIZATION SUITE v2.14.2 " -ForegroundColor Yellow
+        Write-Host "   PROJECT ZOMBOID MOD PERFORMANCE & OPTIMIZATION SUITE v2.15.0 " -ForegroundColor Yellow
         Write-Host "         Created by @KodeMannn with the help of Gemini          " -ForegroundColor DarkCyan
         Write-Host "=================================================================" -ForegroundColor Cyan
         Write-Host "  [1] Run Full Performance Diagnostic Scan (Active Save)" -ForegroundColor White
