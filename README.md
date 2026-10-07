@@ -90,6 +90,8 @@ PZ-Mod-Performance-Suite features 8 selectable operations to fit your workflow:
 
 ## 🔍 Key Features
 
+* **🛡️ Savegame Mod ID Whitespace Preservation & Safe Cleanup Bugfix (v2.14.2):**
+  * **Critical Savegame Protection in Option [6]:** Fixes a regex truncation flaw in `Invoke-PZCleanSaveMods` and `Invoke-PZScanEngine` where mod IDs containing spaces or punctuation (such as `GanydeBielovzki's Frockin Splendor!`) were truncated at the first space. Completely eliminates false "uninstalled phantom mod" reports and prevents Option [6] from stripping valid installed mods from savegame `mods.txt`.
 * **🎯 Viewpoint Situational Trigger Taxonomy & JVM Bytecode Calibration (v2.14.1):**
   * **Granular Situational Gameplay Triggers:** Eliminates misleading blanket `Active: Native JVM Bytecode Execution` labels across all Viewpoint ecosystem sub-mods and ZombieBuddy. Correctly categorizes modules into their exact gameplay triggers: `While Aiming Down Sights (ADS) & Firing` (Project Viewpoint ADS), `While Aiming / Throwing Projectiles` (Advanced Throwables), `While Firing Firearms` (Viewpoint True Ballistics), `During Heavy Storms, Fog & Lightning` (True Weathers), `While Leaning, Prone, Crawling or Vaulting` (Advanced Movement), `Combat Hits & Zombie Damage` (Blood FX), `Near Doors & Doorway Transitions` (Door Fix), `Indoors & Multi-Story Roof Surfaces` (Surface Fix), and `Near Forests & Dense Vegetation` (TREE in 3D).
   * **Elimination of Phantom Cumulative Idle Tax:** Calibrates idle tax for situational JAR mods to `0.00 ms/frame` (since they execute zero per-frame loops when idle on foot), preventing 12+ Viewpoint add-ons from artificially inflating the global modpack idle budget.

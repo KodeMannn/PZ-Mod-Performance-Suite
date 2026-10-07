@@ -1,6 +1,6 @@
 <# :
 @echo off
-title Project Zomboid Mod Performance ^& Optimization Suite v2.14.1
+title Project Zomboid Mod Performance ^& Optimization Suite v2.14.2
 color 0F
 powershell -NoProfile -ExecutionPolicy Bypass -Command "& ([scriptblock]::Create([System.IO.File]::ReadAllText('%~f0'))) %*"
 echo.
@@ -9,7 +9,7 @@ exit /b
 #>
 <#
 .SYNOPSIS
-    Project Zomboid Mod Performance & Optimization Suite v2.14.1
+    Project Zomboid Mod Performance & Optimization Suite v2.14.2
 .DESCRIPTION
     Comprehensive diagnostic scanner and optimization toolkit for Project Zomboid (Build 42 & 41).
     Features Precision Slow Frame Anatomy Dissection (Main vs Render Thread, GC pauses vs Chunk Cache),
@@ -412,9 +412,9 @@ function Invoke-PZCleanSaveMods {
     $cleanedLines = @()
 
     foreach ($line in $currentMods) {
-        if ($line -match 'mod\s*=\s*([^,;}\s]+)') {
-            $modId = $matches[1].Trim()
-            if ($installedIds -notcontains $modId) {
+        if ($line -match 'mod\s*=\s*([^,;]+)') {
+            $modId = ($matches[1] -replace '\s*}.*$', '').Trim()
+            if ($modId -and ($installedIds -notcontains $modId)) {
                 $missingMods += $modId
                 continue # Skip missing mod
             }
@@ -1251,7 +1251,7 @@ function Test-IsSpikeWorthy($mod) {
 # ==============================================================================
 function Invoke-PZScanEngine([string]$CustomServerIni = "", [switch]$LocalWorkshopOnly, [string]$CustomWorkshopPath = "", [string]$CustomLog = "") {
     Write-Host "`n=================================================================" -ForegroundColor Cyan
-    Write-Host "   PROJECT ZOMBOID MOD PERFORMANCE & OPTIMIZATION SUITE v2.14.1 " -ForegroundColor Yellow
+    Write-Host "   PROJECT ZOMBOID MOD PERFORMANCE & OPTIMIZATION SUITE v2.14.2 " -ForegroundColor Yellow
     Write-Host "         Created by @KodeMannn with the help of Gemini          " -ForegroundColor DarkCyan
     Write-Host "=================================================================`n" -ForegroundColor Cyan
 
@@ -1352,8 +1352,8 @@ function Invoke-PZScanEngine([string]$CustomServerIni = "", [switch]$LocalWorksh
         if ($saveDir -and (Test-Path (Join-Path $saveDir "mods.txt"))) {
             $modLines = Get-Content (Join-Path $saveDir "mods.txt")
             foreach ($line in $modLines) {
-                if ($line -match 'mod\s*=\s*([^,;}\s]+)') {
-                    $mId = $matches[1].Trim()
+                if ($line -match 'mod\s*=\s*([^,;]+)') {
+                    $mId = ($matches[1] -replace '\s*}.*$', '').Trim()
                     if ($mId -and ($activeMods -notcontains $mId)) { $activeMods += $mId }
                 }
             }
@@ -2457,7 +2457,7 @@ function Invoke-PZScanEngine([string]$CustomServerIni = "", [switch]$LocalWorksh
     $md = @()
     $md += "# Project Zomboid Mod Performance & Optimization Diagnostic Report"
     $hostName = if ($env:COMPUTERNAME) { $env:COMPUTERNAME } elseif ($env:HOSTNAME) { $env:HOSTNAME } else { [System.Net.Dns]::GetHostName() }
-    $md += "*Generated: $(Get-Date -Format 'yyyy-MM-dd HH:mm:ss') on $hostName by PZ-Mod-Performance-Suite v2.14.1 (Coded with the help of Google Gemini)*"
+    $md += "*Generated: $(Get-Date -Format 'yyyy-MM-dd HH:mm:ss') on $hostName by PZ-Mod-Performance-Suite v2.14.2 (Coded with the help of Google Gemini)*"
     $md += ""
     $md += "## Executive Summary"
     $md += "- **Game Version:** $pzVersion"
@@ -2665,7 +2665,7 @@ function Show-PZMainMenu {
     while ($true) {
         Clear-Host
         Write-Host "=================================================================" -ForegroundColor Cyan
-        Write-Host "   PROJECT ZOMBOID MOD PERFORMANCE & OPTIMIZATION SUITE v2.14.1 " -ForegroundColor Yellow
+        Write-Host "   PROJECT ZOMBOID MOD PERFORMANCE & OPTIMIZATION SUITE v2.14.2 " -ForegroundColor Yellow
         Write-Host "         Created by @KodeMannn with the help of Gemini          " -ForegroundColor DarkCyan
         Write-Host "=================================================================" -ForegroundColor Cyan
         Write-Host "  [1] Run Full Performance Diagnostic Scan (Active Save)" -ForegroundColor White
