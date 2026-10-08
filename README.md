@@ -94,6 +94,11 @@ PZ-Mod-Performance-Suite features 9 selectable operations to fit your workflow:
 
 ## 🔍 Key Features
 
+* **⚡ Dynamic JVM Launcher Telemetry & Context-Aware Optimizer Status (v2.19.0):**
+  * **Dynamic JVM Configuration Inspection (`Get-PZJvmStatus`):** Deeply inspects `ProjectZomboid64.json` launcher arguments (`vmArgs`, `windows.10.0.17134`, `linux`, `macos`) and ingested runtime log telemetry to verify active JVM garbage collector settings, configured heap bounds (`-Xmx`), and low-latency tuning flags (`-XX:+UseG1GC`, `-XX:MaxGCPauseMillis=5`, `-Dpzopt.gc=g1`).
+  * **Context-Aware Freeze Attribution & Fixes:** Completely eliminates misleading static strings (such as hardcoded `-Xmx32g` or unconditional prompts to run Option `[4]`). When Low-Latency G1GC tuning is already active, the engine recognizes that pauses are mitigated and accurately attributes remaining Young Gen allocation churn to massive 3D model/mesh chunk loading (recommending model pack management via Option `[6]`). If unoptimized, the tool reports actual configured heap size and directs the player to Option `[4]`.
+  * **Interactive Menu Live Status Badge:** Equips Menu Option `[4]` with live status indicators directly on the main menu: `[4] One-Click Java GC Optimizer [ACTIVE: G1GC + 16GB Heap]` when tuned, or `[APPLY G1GC + 16GB CLAMP]` when untuned.
+  * **Enhanced Launcher Serialization:** Hardens `Optimize-PZJavaGC` with automatic fallback injection if `-Xmx` is omitted from launcher configurations and expands compatibility across all Windows OS profiles.
 * **🧹 Savegame Mod Sanitizer & Selective Mod Purging (v2.18.0):**
   * **Interactive Savegame Mod Manager:** Transforms Option `[6]` from a passive phantom cleaner into an interactive savegame mod management suite. Automatically displays active savegame information and enumerates all enabled mods with clean indexing and live installation status.
   * **Selective 1-Click Mod Disabling:** Enables players to selectively disable or remove any individual mod (such as heavy 3D voxel mesh packs like `PZVoxelStudioViewpoint`) directly from an ongoing savegame without needing manual text editors or risking syntax corruption.

@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # ==============================================================================
-# PROJECT ZOMBOID MOD PERFORMANCE & OPTIMIZATION SUITE v2.18.0
+# PROJECT ZOMBOID MOD PERFORMANCE & OPTIMIZATION SUITE v2.19.0
 # Cross-Platform Launcher for Linux (including Steam Deck / SteamOS) & macOS
 # Created by @KodeMannn with the help of Gemini
 # ==============================================================================

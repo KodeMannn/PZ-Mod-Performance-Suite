@@ -1,6 +1,6 @@
 <#
 .SYNOPSIS
-    Project Zomboid Mod Performance & Optimization Suite v2.18.0
+    Project Zomboid Mod Performance & Optimization Suite v2.19.0
 .DESCRIPTION
     Comprehensive diagnostic scanner and optimization toolkit for Project Zomboid (Build 42 & 41).
     Features Precision Slow Frame Anatomy Dissection (Main vs Render Thread, GC pauses vs Chunk Cache),
@@ -190,6 +190,82 @@ function Get-PZInstallPath {
         }
     }
     return $null
+}
+
+function Get-PZJvmStatus {
+    $status = [PSCustomObject]@{
+        InstalledJsonFound = $false
+        ConfiguredHeap     = "16g"
+        IsG1GC             = $false
+        HasPauseTarget     = $false
+        HasPzOptTag        = $false
+        IsFullyOptimized   = $false
+        GcType             = "Unknown"
+        Summary            = "Launcher Config Not Found"
+    }
+
+    $installDir = Get-PZInstallPath
+    if (-not $installDir) { return $status }
+    $jsonPath = Join-Path $installDir "ProjectZomboid64.json"
+    if (-not (Test-Path $jsonPath)) { return $status }
+
+    try {
+        $raw = Get-Content $jsonPath -Raw -ErrorAction Stop
+        if ($raw.Length -gt 0 -and $raw[0] -eq [char]0xFEFF) {
+            $raw = $raw.Substring(1)
+        }
+        $json = $raw | ConvertFrom-Json
+        $status.InstalledJsonFound = $true
+
+        # Scan vmArgs for -Xmx
+        if ($json.vmArgs) {
+            foreach ($arg in $json.vmArgs) {
+                if ($arg -match '^-Xmx(\d+[gmGM])') {
+                    $status.ConfiguredHeap = $matches[1].ToLower()
+                }
+            }
+        }
+
+        # Scan all OS vmArgs (windows, linux, macos)
+        $allVmArgs = @()
+        if ($json.vmArgs) { $allVmArgs += $json.vmArgs }
+        if ($json.windows) {
+            if ($json.windows.'10.0.17134' -and $json.windows.'10.0.17134'.vmArgs) {
+                $allVmArgs += $json.windows.'10.0.17134'.vmArgs
+            }
+            if ($json.windows.'6.1' -and $json.windows.'6.1'.vmArgs) {
+                $allVmArgs += $json.windows.'6.1'.vmArgs
+            }
+        }
+        if ($json.linux -and $json.linux.vmArgs) { $allVmArgs += $json.linux.vmArgs }
+        if ($json.macos -and $json.macos.vmArgs) { $allVmArgs += $json.macos.vmArgs }
+
+        foreach ($arg in $allVmArgs) {
+            if ($arg -match '-XX:\+UseG1GC') { $status.IsG1GC = $true }
+            if ($arg -match '-XX:\+UseZGC') { $status.GcType = "ZGC (Vanilla B42 Default)" }
+            if ($arg -match '-XX:MaxGCPauseMillis=(\d+)') { $status.HasPauseTarget = $true }
+            if ($arg -match '-Dpzopt\.gc=g1') { $status.HasPzOptTag = $true }
+        }
+
+        if ($status.IsG1GC) {
+            $status.GcType = "G1GC"
+            if ($status.HasPauseTarget -or $status.HasPzOptTag) {
+                $status.IsFullyOptimized = $true
+                $status.Summary = "G1GC Low-Latency ($($status.ConfiguredHeap.ToUpper()) Heap, 5ms Pause Target)"
+            } else {
+                $status.Summary = "G1GC Standard ($($status.ConfiguredHeap.ToUpper()) Heap)"
+            }
+        } elseif ($status.GcType -eq "ZGC (Vanilla B42 Default)") {
+            $status.Summary = "ZGC Vanilla ($($status.ConfiguredHeap.ToUpper()) Heap)"
+        } else {
+            $status.GcType = "Default JVM GC"
+            $status.Summary = "Default GC ($($status.ConfiguredHeap.ToUpper()) Heap)"
+        }
+    } catch {
+        $status.Summary = "Error reading launcher JSON"
+    }
+
+    return $status
 }
 
 function Get-WorkshopPaths([string]$customPath = "") {
@@ -439,8 +515,10 @@ function Invoke-PZFixGC {
 
         # Heap calculation: Clamp oversized heaps (>16g) to eliminate multi-hundred ms G1GC sweeps, or elevate low heaps (<16g) up to 16GB
         $newArgs = @()
+        $foundXmx = $false
         foreach ($arg in $json.vmArgs) {
             if ($arg -match '^-Xmx(\d+)([gmGM])') {
+                $foundXmx = $true
                 $num = [int]$matches[1]
                 $unit = $matches[2].ToLower()
                 $existingMB = if ($unit -eq 'g') { $num * 1024 } else { $num }
@@ -452,20 +530,40 @@ function Invoke-PZFixGC {
                     Write-Host " [OPTIMIZE] Elevating heap ($($num)$($unit.ToUpper())) to 16GB (-Xmx16g) for modern modpacks." -ForegroundColor Cyan
                 } else {
                     $newArgs += "-Xmx16g"
+                    Write-Host " [OK] Heap already set to optimal 16GB (-Xmx16g)." -ForegroundColor Gray
                 }
             } else {
                 $newArgs += $arg
             }
         }
+        if (-not $foundXmx) {
+            $newArgs += "-Xmx16g"
+            Write-Host " [OPTIMIZE] Added -Xmx16g heap limit to vmArgs." -ForegroundColor Cyan
+        }
         $json.vmArgs = $newArgs
 
         # Configure G1GC with 5ms pause target for Windows, Linux, and macOS
-        if ($json.windows -and $json.windows.'10.0.17134') {
-            $json.windows.'10.0.17134'.vmArgs = @(
-                "-XX:+UseG1GC",
-                "-Dpzopt.gc=g1",
-                "-XX:MaxGCPauseMillis=5"
-            )
+        if (-not $json.windows) {
+            $json | Add-Member -MemberType NoteProperty -Name "windows" -Value (New-Object PSObject) -ErrorAction SilentlyContinue
+        }
+        if ($json.windows) {
+            if (-not $json.windows.'10.0.17134') {
+                $json.windows | Add-Member -MemberType NoteProperty -Name "10.0.17134" -Value (New-Object PSObject) -ErrorAction SilentlyContinue
+            }
+            if ($json.windows.'10.0.17134') {
+                $json.windows.'10.0.17134'.vmArgs = @(
+                    "-XX:+UseG1GC",
+                    "-Dpzopt.gc=g1",
+                    "-XX:MaxGCPauseMillis=5"
+                )
+            }
+            if ($json.windows.'6.1') {
+                $json.windows.'6.1'.vmArgs = @(
+                    "-XX:+UseG1GC",
+                    "-Dpzopt.gc=g1",
+                    "-XX:MaxGCPauseMillis=5"
+                )
+            }
         }
         if ($json.linux) {
             $json.linux.vmArgs = @(
@@ -1658,7 +1756,7 @@ function Build-FreezeCluster($frames) {
 # ==============================================================================
 function Invoke-PZScanEngine([string]$CustomServerIni = "", [switch]$LocalWorkshopOnly, [string]$CustomWorkshopPath = "", [string]$CustomLog = "") {
     Write-Host "`n=================================================================" -ForegroundColor Cyan
-    Write-Host "   PROJECT ZOMBOID MOD PERFORMANCE & OPTIMIZATION SUITE v2.18.0 " -ForegroundColor Yellow
+    Write-Host "   PROJECT ZOMBOID MOD PERFORMANCE & OPTIMIZATION SUITE v2.19.0 " -ForegroundColor Yellow
     Write-Host "         Created by @KodeMannn with the help of Gemini          " -ForegroundColor DarkCyan
     Write-Host "=================================================================`n" -ForegroundColor Cyan
 
@@ -2277,6 +2375,8 @@ function Invoke-PZScanEngine([string]$CustomServerIni = "", [switch]$LocalWorksh
     $totalConcCount = 0
     $totalConcMs = 0
     $hasGcTelemetry = $false
+    $logHasPzOptGc = $false
+    $logJvmMaxMb = 0
     $maxEvictions = 0
     $maxEvictedMb = 0.0
     $maxChunkBuilds = 0
@@ -2577,6 +2677,12 @@ function Invoke-PZScanEngine([string]$CustomServerIni = "", [switch]$LocalWorksh
             if ($line -match 'frame cap:\s*game\s*(\d+)\s*fps') {
                 $frameCap = "$($matches[1]) FPS"
             }
+            if ($line -match 'pzopt\.gc=g1') {
+                $logHasPzOptGc = $true
+            }
+            if ($line -match 'JVM\s*\(free:\s*\d+\s*Mb,\s*max:\s*(\d+)\s*Mb') {
+                $logJvmMaxMb = [int]$matches[1]
+            }
         }
     }
 
@@ -2817,9 +2923,19 @@ function Invoke-PZScanEngine([string]$CustomServerIni = "", [switch]$LocalWorksh
 
         if ($wRestDet -match "collector's pauses" -and $gcPct -ge 50.0) {
             $worstSpikeAnatomy = "$wRest ms Engine & GC Pauses ($gcPct%) | $wOurs ms Chunk Meshing & Passes ($ccPct%)"
-            $worstSpikeRootCause = "Severe Java Garbage Collection Freeze (Engine Memory Sweep)"
-            $worstSpikeAttribution = "JVM Heap Garbage Collection sweep on oversized heap (-Xmx32g). Young Gen accumulation caused 500ms+ freeze. NOT caused by Lua UI or QOL mods."
-            $worstSpikeRecommendation = "Apply Menu Option [4] (One-Click G1GC + 5ms Pause Tuning & 16GB Heap Clamp) to eliminate GC freezes."
+            $jvmState = Get-PZJvmStatus
+            $heapDisplay = if ($jvmState.ConfiguredHeap) { $jvmState.ConfiguredHeap.ToUpper() } elseif ($logJvmMaxMb -gt 0) { "$([math]::Round($logJvmMaxMb / 1024))GB" } else { "16GB" }
+            $isTuned = $jvmState.IsFullyOptimized -or $jvmState.IsG1GC -or $logHasPzOptGc
+
+            if ($isTuned) {
+                $worstSpikeRootCause = "Java Garbage Collection Young Gen Sweep (G1GC Active - $heapDisplay Heap)"
+                $worstSpikeAttribution = "Java Garbage Collection Young Gen sweep during intensive allocation pressure (G1GC active, $heapDisplay heap). Pauses are heavily dampened by G1GC, but massive 3D model/mesh chunk loading is still generating object allocations."
+                $worstSpikeRecommendation = "Low-latency G1GC & 16GB clamp is already active! To eliminate remaining allocation pressure, disable heavy 3D asset packs (e.g. PZVoxelStudioViewpoint) via Menu Option [6]."
+            } else {
+                $worstSpikeRootCause = "Severe Java Garbage Collection Freeze (Engine Memory Sweep)"
+                $worstSpikeAttribution = "JVM Heap Garbage Collection sweep on unoptimized heap (-Xmx$($heapDisplay.ToLower())). Young Gen accumulation caused 500ms+ freeze. NOT caused by Lua UI or QOL mods."
+                $worstSpikeRecommendation = "Apply Menu Option [4] (One-Click G1GC + 5ms Pause Tuning & 16GB Heap Clamp) to eliminate GC freezes."
+            }
             if ($wCC -ge 10.0 -or $wBuilds -ge 10) {
                 $candidates = @($topMeshMods | Where-Object { Test-IsSpikeWorthy $_ })
                 $extraWorthy = @($worthyMods | Where-Object { $candidates -notcontains $_ })
@@ -2965,6 +3081,11 @@ function Invoke-PZScanEngine([string]$CustomServerIni = "", [switch]$LocalWorksh
         Write-Host " Java Heap Allocation : $heapReport" -ForegroundColor White
     }
     Write-Host " JVM Garbage Collector: $gcReport" -ForegroundColor $gcColor
+    $jvmStatusObj = Get-PZJvmStatus
+    if ($jvmStatusObj.InstalledJsonFound) {
+        $jvmBadgeColor = if ($jvmStatusObj.IsFullyOptimized) { "Green" } elseif ($jvmStatusObj.IsG1GC) { "Cyan" } else { "Yellow" }
+        Write-Host " JVM Launcher Tuning  : $($jvmStatusObj.Summary)" -ForegroundColor $jvmBadgeColor
+    }
     if ($sessionDurationMinutes -gt 0.0) {
         Write-Host " GC Churn Velocity    : $gcVelocitySweepsPerMin sweeps/min ($gcVelocityRating)" -ForegroundColor $(if ($gcVelocitySweepsPerMin -ge 25.0) { "Red" } elseif ($gcVelocitySweepsPerMin -ge 10.0) { "Yellow" } else { "Green" })
     }
@@ -3323,6 +3444,9 @@ function Invoke-PZScanEngine([string]$CustomServerIni = "", [switch]$LocalWorksh
         $md += "- **Chunk Meshing Peak:** $maxChunkBuilds builds ($maxChunkDuration ms rebuild stall)"
     }
     $md += "- **JVM Garbage Collector:** $gcReport"
+    if ($jvmStatusObj.InstalledJsonFound) {
+        $md += "- **JVM Launcher Tuning:** $($jvmStatusObj.Summary)"
+    }
     if ($sessionDurationMinutes -gt 0.0) {
         $md += "- **GC Churn Velocity:** $gcVelocitySweepsPerMin sweeps/min ($gcVelocityRating) across $sessionDurationMinutes min session"
     }
@@ -3690,14 +3814,23 @@ function Configure-PZCustomWorkshopPath {
 function Show-PZMainMenu {
     while ($true) {
         Clear-Host
+        $jvmStatusObj = Get-PZJvmStatus
+        $gcMenuBadge = if ($jvmStatusObj.IsFullyOptimized) {
+            "[ACTIVE: G1GC + $($jvmStatusObj.ConfiguredHeap.ToUpper()) Heap]"
+        } elseif ($jvmStatusObj.IsG1GC) {
+            "[ACTIVE: G1GC Standard]"
+        } else {
+            "[APPLY G1GC + 16GB CLAMP]"
+        }
+
         Write-Host "=================================================================" -ForegroundColor Cyan
-        Write-Host "   PROJECT ZOMBOID MOD PERFORMANCE & OPTIMIZATION SUITE v2.18.0 " -ForegroundColor Yellow
+        Write-Host "   PROJECT ZOMBOID MOD PERFORMANCE & OPTIMIZATION SUITE v2.19.0 " -ForegroundColor Yellow
         Write-Host "         Created by @KodeMannn with the help of Gemini          " -ForegroundColor DarkCyan
         Write-Host "=================================================================" -ForegroundColor Cyan
         Write-Host "  [1] Run Full Performance Diagnostic Scan (Active Save)" -ForegroundColor White
         Write-Host "  [2] Scan Dedicated / Multiplayer Server Config (.ini)" -ForegroundColor White
         Write-Host "  [3] Scan Local Workshop Mods (Zomboid\Workshop)" -ForegroundColor White
-        Write-Host "  [4] One-Click Java GC Optimizer (Apply G1GC + 5ms Pause Tuning)" -ForegroundColor White
+        Write-Host "  [4] One-Click Java GC Optimizer $gcMenuBadge" -ForegroundColor $(if ($jvmStatusObj.IsFullyOptimized) { "Green" } elseif ($jvmStatusObj.IsG1GC) { "Cyan" } else { "White" })
         Write-Host "  [5] Safe Frame Cap Optimizer (Reduce Lua Tick Multiplier)" -ForegroundColor White
         Write-Host "  [6] Savegame Mod Sanitizer (Purge Phantoms / Selectively Remove Mods)" -ForegroundColor White
         Write-Host "  [7] Revert Changes / Restore Backups (JVM, FPS, Savegame)" -ForegroundColor Yellow
