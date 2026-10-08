@@ -1,6 +1,6 @@
 <# :
 @echo off
-title Project Zomboid Mod Performance ^& Optimization Suite v2.19.0
+title Project Zomboid Mod Performance ^& Optimization Suite v2.20.0
 color 0F
 powershell -NoProfile -ExecutionPolicy Bypass -Command "& ([scriptblock]::Create([System.IO.File]::ReadAllText('%~f0'))) %*"
 echo.
@@ -9,7 +9,7 @@ exit /b
 #>
 <#
 .SYNOPSIS
-    Project Zomboid Mod Performance & Optimization Suite v2.19.0
+    Project Zomboid Mod Performance & Optimization Suite v2.20.0
 .DESCRIPTION
     Comprehensive diagnostic scanner and optimization toolkit for Project Zomboid (Build 42 & 41).
     Features Precision Slow Frame Anatomy Dissection (Main vs Render Thread, GC pauses vs Chunk Cache),
@@ -1187,7 +1187,7 @@ function Analyze-ModLuaSemantics([System.IO.FileInfo[]]$luaFiles) {
         }
     }
 
-    $isStationaryGated = ($fullCode -match 'not\s+player:isPlayerMoving|not\s+isPlayerMoving|not\s+player:isMoving|not\s+isMoving|isStationary|not\s+\w+:isPlayerMoving|isPlayerStationary')
+    $isStationaryGated = ($fullCode -match 'not\s+(?:player:)?isPlayerMoving|not\s+(?:player:)?isMoving|isStationary|isPlayerStationary|local\s+moving\s*=\s*.*isPlayerMoving.*if\s+not\s+moving\b|if\s+not\s+moving\b')
     $isOptInToggle = ($fullCode -match 'isActive\(\)|isEnabled\b|toggleState|isToggled|getCustomOption|HOTKEY_BINDING')
     $optInModeName = $null
     if ($fullCode -match 'ViewpointQOLContainers|enableContainersHotkey|containersKey') {
@@ -1385,8 +1385,11 @@ function Get-ModTriggerScenarios {
     $optInPrefix = if ($optInModeName) { "Opt-In [$optInModeName]: " } elseif ($isOptInToggle) { "Opt-In Mode: " } else { "Situational: " }
     if ($inHookHeavyContainers -ge 1) {
         if ($isStationaryGated) {
-            & $addScen "When Standing Still / Stationary (Container Rebuild)" "~5-15 ms [Stationary Blip]" "LOW" "Stationary" "Stationary gating allows container rebuild only when standing still" 4
-            & $addScen "While Moving on Foot" "< 1 ms [Imperceptible]" "NEGLIGIBLE" "Dormant on Foot" "Zero movement hitch while walking or running" 5
+            & $addScen "$($optInPrefix)When Stopping Near Containers (Backpack Rebuild)" "~5-15 ms [Stationary Blip]" "LOW" "Stationary" "Stationary gating allows loot window backpack rebuild only once the player stops moving near containers" 4
+            & $addScen "While Moving on Foot (Near or Far)" "< 1 ms [Imperceptible]" "NEGLIGIBLE" "Dormant on Foot" "Zero movement hitch while walking or running (container refresh strictly deferred)" 5
+            if ($isOptInToggle -or $optInModeName) {
+                & $addScen "Normal Gameplay Baseline (All-Containers Inactive)" "< 1 ms [Imperceptible]" "NEGLIGIBLE" "Dormant" "Container loops completely inactive when All-Containers mode is untoggled" 5
+            }
         } else {
             & $addScen "Moving Near Containers (Backpack & Weight Rebuild)" "~15-40 ms [Container Hitch]" "MODERATE" "Active Movement Near Containers" "Unconstrained container rebuild firing on tick while moving near loot containers" 3
             & $addScen "Standing Still Away from Containers" "< 1 ms [Imperceptible]" "NEGLIGIBLE" "Dormant" "Zero container rebuilds away from loot containers" 5
@@ -1564,7 +1567,7 @@ function Get-ModStutterMetrics {
     $hookTax = ($permHooks * 0.45) + ($throttledHooks * 0.02)
     $worldTax = if ($permHooks -gt 0) { $inHookWorldQueries * 0.08 } elseif ($throttledHooks -gt 0) { $inHookWorldQueries * 0.015 } else { 0.0 }
     $invTax = if ($permHooks -gt 0) { $inHookInvQueries * 0.04 } elseif ($throttledHooks -gt 0) { $inHookInvQueries * 0.01 } else { 0.0 }
-    $containerTax = if ($permHooks -gt 0) { $inHookHeavyContainers * 0.15 } elseif ($throttledHooks -gt 0) { $inHookHeavyContainers * 0.04 } else { 0.0 }
+    $containerTax = if ($isStationaryGated) { 0.0 } elseif ($permHooks -gt 0) { $inHookHeavyContainers * 0.15 } elseif ($throttledHooks -gt 0) { $inHookHeavyContainers * 0.04 } else { 0.0 }
     $uiPollTax = if ($permHooks -gt 0) { $inHookUIPolls * 0.02 } elseif ($throttledHooks -gt 0) { $inHookUIPolls * 0.005 } else { 0.0 }
     $jniTax = if ($permHooks -gt 0) { $inHookJNICalls * 0.02 } elseif ($throttledHooks -gt 0) { $inHookJNICalls * 0.005 } else { 0.0 }
 
@@ -1622,7 +1625,7 @@ function Get-ModStutterMetrics {
     }
 
     $taxText = if ($activeTaxRaw -gt 0.01) {
-        if ($idleTaxRaw -gt 0.01 -and $idleTaxRaw -lt $activeTaxRaw) {
+        if ($idleTaxRaw -lt $activeTaxRaw) {
             "+$([math]::Round($activeTaxRaw, 2)) ms peak (+$( [math]::Round($idleTaxRaw, 2) ) ms idle)"
         } else {
             "+$([math]::Round($activeTaxRaw, 2)) ms/frame"
@@ -1765,7 +1768,7 @@ function Build-FreezeCluster($frames) {
 # ==============================================================================
 function Invoke-PZScanEngine([string]$CustomServerIni = "", [switch]$LocalWorkshopOnly, [string]$CustomWorkshopPath = "", [string]$CustomLog = "") {
     Write-Host "`n=================================================================" -ForegroundColor Cyan
-    Write-Host "   PROJECT ZOMBOID MOD PERFORMANCE & OPTIMIZATION SUITE v2.19.0 " -ForegroundColor Yellow
+    Write-Host "   PROJECT ZOMBOID MOD PERFORMANCE & OPTIMIZATION SUITE v2.20.0 " -ForegroundColor Yellow
     Write-Host "         Created by @KodeMannn with the help of Gemini          " -ForegroundColor DarkCyan
     Write-Host "=================================================================`n" -ForegroundColor Cyan
 
@@ -2144,11 +2147,21 @@ function Invoke-PZScanEngine([string]$CustomServerIni = "", [switch]$LocalWorksh
         $riskScore += [math]::Round($transHooks * 0.5)
 
         $riskScore += [math]::Min(5, [math]::Floor($staticWorldQueries / 20))
-        $riskScore += [math]::Min(15, [math]::Floor($inHookInvQueries / 2))
+        if ($permHooks -gt 0) {
+            $riskScore += [math]::Min(15, [math]::Floor($inHookInvQueries / 2))
+            $riskScore += [math]::Min(15, [math]::Floor($inHookUIPolls / 2))
+            $riskScore += [math]::Min(10, [math]::Floor($inHookJNICalls / 3))
+        } else {
+            $riskScore += [math]::Min(5, [math]::Floor($inHookInvQueries / 5))
+            $riskScore += [math]::Min(5, [math]::Floor($inHookUIPolls / 10))
+            $riskScore += [math]::Min(3, [math]::Floor($inHookJNICalls / 5))
+        }
         $riskScore += [math]::Min(3, [math]::Floor($staticInvQueries / 50))
-        $riskScore += [math]::Min(20, $inHookHeavyContainers * 5)
-        $riskScore += [math]::Min(15, [math]::Floor($inHookUIPolls / 2))
-        $riskScore += [math]::Min(10, [math]::Floor($inHookJNICalls / 3))
+        if ($luaSemantics.IsStationaryGated) {
+            $riskScore += [math]::Min(5, $inHookHeavyContainers * 1)
+        } else {
+            $riskScore += [math]::Min(20, $inHookHeavyContainers * 5)
+        }
 
         if ($worldMeshCount -gt 5000) { $riskScore += 45 }
         elseif ($worldMeshCount -gt 1000) { $riskScore += 25 }
@@ -2190,7 +2203,11 @@ function Invoke-PZScanEngine([string]$CustomServerIni = "", [switch]$LocalWorksh
             $dynamicReasons += "$inHookInvQueries in-hook inventory searches"
         }
         if ($inHookHeavyContainers -gt 0) {
-            $dynamicReasons += "$inHookHeavyContainers heavy container rebuild call$(if ($inHookHeavyContainers -ne 1) { 's' } else { '' }) (refreshBackpacks/refreshWeight)"
+            if ($luaSemantics.IsStationaryGated) {
+                $dynamicReasons += "Container rebuild calls are stationary-gated (only executes when stopped near containers)"
+            } else {
+                $dynamicReasons += "$inHookHeavyContainers heavy container rebuild call$(if ($inHookHeavyContainers -ne 1) { 's' } else { '' }) (refreshBackpacks/refreshWeight)"
+            }
         }
         if ($inHookUIPolls -gt 5) {
             $dynamicReasons += "$inHookUIPolls per-frame UI tree inquiries (UIManager/getIsVisible polling)"
@@ -3833,7 +3850,7 @@ function Show-PZMainMenu {
         }
 
         Write-Host "=================================================================" -ForegroundColor Cyan
-        Write-Host "   PROJECT ZOMBOID MOD PERFORMANCE & OPTIMIZATION SUITE v2.19.0 " -ForegroundColor Yellow
+        Write-Host "   PROJECT ZOMBOID MOD PERFORMANCE & OPTIMIZATION SUITE v2.20.0 " -ForegroundColor Yellow
         Write-Host "         Created by @KodeMannn with the help of Gemini          " -ForegroundColor DarkCyan
         Write-Host "=================================================================" -ForegroundColor Cyan
         Write-Host "  [1] Run Full Performance Diagnostic Scan (Active Save)" -ForegroundColor White
