@@ -85,7 +85,7 @@ PZ-Mod-Performance-Suite features 9 selectable operations to fit your workflow:
 | **`[3] Scan Local Workshop Mods`** | Local workshop development folder (`Zomboid\Workshop` or custom) | **< 1 second** | Profiling custom mods under development before publishing to Steam |
 | **`[4] 1-Click Java GC Tuning`** | `ProjectZomboid64.json` launcher configuration | **< 1 second** | Eliminating 200–400ms periodic world freezes via low-latency G1GC |
 | **`[5] Safe Frame Cap Tuning`** | `options.ini` display frameRate setting | **< 1 second** | Throttling Lua tick execution overhead down from 240/uncapped FPS |
-| **`[6] Clean Phantom Mods`** | Active savegame `mods.txt` | **< 1 second** | Purging uninstalled ghost mods to stop console spam and speed up boot |
+| **`[6] Savegame Mod Sanitizer`** | Active savegame `mods.txt` | **< 1 second** | Purging uninstalled phantom mods or selectively disabling heavy mods |
 | **`[7] Revert Changes / Backups`** | JVM config, FPS cap, and savegame mods | **< 1 second** | Safely restoring original `.bak` backups and vanilla engine settings |
 | **`[8] Open Last Report`** | `ModPerformanceReport.md` | **Instant** | Viewing detailed breakdown, conflict tables, and Discord summaries |
 | **`[9] Configure Workshop Path`** | Persistent config (`pz_scanner_config.json`) | **Instant** | Configuring custom Workshop or Steam library paths on secondary drives |
@@ -94,6 +94,11 @@ PZ-Mod-Performance-Suite features 9 selectable operations to fit your workflow:
 
 ## 🔍 Key Features
 
+* **🧹 Savegame Mod Sanitizer & Selective Mod Purging (v2.18.0):**
+  * **Interactive Savegame Mod Manager:** Transforms Option `[6]` from a passive phantom cleaner into an interactive savegame mod management suite. Automatically displays active savegame information and enumerates all enabled mods with clean indexing and live installation status.
+  * **Selective 1-Click Mod Disabling:** Enables players to selectively disable or remove any individual mod (such as heavy 3D voxel mesh packs like `PZVoxelStudioViewpoint`) directly from an ongoing savegame without needing manual text editors or risking syntax corruption.
+  * **Pristine Automatic Backups:** Automatically generates clean `mods.txt.bak` before any file modifications, providing 1-click restore functionality directly from the Option `[6]` sub-menu or Option `[7]`.
+  * **Headless Automation:** Preserves headless CLI automation via `-CleanSave` for unattended server maintenance and CI/CD pipelines.
 * **💾 Multi-Drive Steam Library Discovery & Custom Workshop Paths (v2.17.0):**
   * **Dynamic Multi-Drive Enumeration:** Completely resolves workshop detection issues on secondary drives (e.g. `D:`, `E:`, `F:`, `G:`) and custom Steam library configurations. Automatically inspects Windows Registry (`Steam App 108600` uninstall key and Valve Steam install keys), iterates all active logical drives via `[System.IO.DriveInfo]::GetDrives()`, and parses `libraryfolders.vdf` across all drives with support for both modern and legacy VDF formatting.
   * **Persistent Custom Workshop Path Configuration (`pz_scanner_config.json`):** Provides Menu Option `[9]` to inspect discovered libraries and configure/persist a custom Steam Workshop or mod directory path without having to re-enter it on every run.

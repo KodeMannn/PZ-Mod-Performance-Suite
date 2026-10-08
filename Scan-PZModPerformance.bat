@@ -1,6 +1,6 @@
 <# :
 @echo off
-title Project Zomboid Mod Performance ^& Optimization Suite v2.17.0
+title Project Zomboid Mod Performance ^& Optimization Suite v2.18.0
 color 0F
 powershell -NoProfile -ExecutionPolicy Bypass -Command "& ([scriptblock]::Create([System.IO.File]::ReadAllText('%~f0'))) %*"
 echo.
@@ -9,7 +9,7 @@ exit /b
 #>
 <#
 .SYNOPSIS
-    Project Zomboid Mod Performance & Optimization Suite v2.17.0
+    Project Zomboid Mod Performance & Optimization Suite v2.18.0
 .DESCRIPTION
     Comprehensive diagnostic scanner and optimization toolkit for Project Zomboid (Build 42 & 41).
     Features Precision Slow Frame Anatomy Dissection (Main vs Render Thread, GC pauses vs Chunk Cache),
@@ -546,41 +546,53 @@ function Set-PZFrameCap([int]$targetFps) {
 # ==============================================================================
 # Optimization Action: Clean Phantom / Missing Mods from Save
 # ==============================================================================
-function Invoke-PZCleanSaveMods {
-    Write-Host "`n[*] Checking savegame for uninstalled phantom mods..." -ForegroundColor Yellow
+function Invoke-PZCleanSaveMods([switch]$Headless) {
+    Write-Host "`n[*] Scanning savegame mod configuration..." -ForegroundColor Yellow
     $latestSaveIni = Join-Path $ZomboidUserPath "latestSave.ini"
     $saveDir = $null
+    $saveName = "Unknown"
     if (Test-Path $latestSaveIni) {
         $lines = Get-Content $latestSaveIni
         if ($lines.Count -ge 2) {
             $candidate = Join-Path $ZomboidUserPath "Saves\$($lines[1].Trim())\$($lines[0].Trim())"
-            if (Test-Path $candidate) { $saveDir = $candidate }
+            if (Test-Path $candidate) {
+                $saveDir = $candidate
+                $saveName = "$($lines[1].Trim()) / $($lines[0].Trim())"
+            }
         }
     }
     if (-not $saveDir) {
         $latest = Get-ChildItem -Path (Join-Path $ZomboidUserPath "Saves") -Recurse -Filter "mods.txt" | Sort-Object LastWriteTime -Descending | Select-Object -First 1
-        if ($latest) { $saveDir = $latest.DirectoryName }
+        if ($latest) {
+            $saveDir = $latest.DirectoryName
+            $saveName = $latest.Directory.Name
+        }
     }
     if (-not $saveDir) {
-        Write-Host " [!] No active savegame found." -ForegroundColor Yellow
+        Write-Host " [!] No active savegame found in $ZomboidUserPath\Saves." -ForegroundColor Yellow
         return
     }
 
     $modsFile = Join-Path $saveDir "mods.txt"
     if (-not (Test-Path $modsFile)) {
-        Write-Host " [!] mods.txt not found in save $saveDir." -ForegroundColor Yellow
+        Write-Host " [!] mods.txt not found in save: $saveDir" -ForegroundColor Yellow
         return
     }
 
-    # Gather installed mod IDs
+    # Gather installed mod IDs and titles across Workshop, local mods, and custom paths
     $installedIds = @()
+    $installedTitles = @{}
     $wsPaths = Get-WorkshopPaths -customPath $CustomWorkshopPath
     foreach ($w in $wsPaths) {
         $infos = Get-ChildItem -Path $w -Recurse -Filter "mod.info" -ErrorAction SilentlyContinue
         foreach ($i in $infos) {
             $c = Get-Content $i.FullName -ErrorAction SilentlyContinue
             $id = (($c | Where-Object { $_ -match '^id=' }) -replace '^id=\s*', '').Trim() | Select-Object -First 1
-            if ($id -and ($installedIds -notcontains $id)) { $installedIds += $id }
+            $name = (($c | Where-Object { $_ -match '^name=' }) -replace '^name=\s*', '').Trim() | Select-Object -First 1
+            if ($id) {
+                if ($installedIds -notcontains $id) { $installedIds += $id }
+                if ($name -and -not $installedTitles[$id]) { $installedTitles[$id] = $name }
+            }
         }
     }
     $localMods = Join-Path $ZomboidUserPath "mods"
@@ -589,44 +601,164 @@ function Invoke-PZCleanSaveMods {
         foreach ($i in $infos) {
             $c = Get-Content $i.FullName -ErrorAction SilentlyContinue
             $id = (($c | Where-Object { $_ -match '^id=' }) -replace '^id=\s*', '').Trim() | Select-Object -First 1
-            if ($id -and ($installedIds -notcontains $id)) { $installedIds += $id }
+            $name = (($c | Where-Object { $_ -match '^name=' }) -replace '^name=\s*', '').Trim() | Select-Object -First 1
+            if ($id) {
+                if ($installedIds -notcontains $id) { $installedIds += $id }
+                if ($name -and -not $installedTitles[$id]) { $installedTitles[$id] = $name }
+            }
         }
     }
 
     $currentMods = Get-Content $modsFile
-    $missingMods = @()
-    $cleanedLines = @()
-
+    $activeModList = @()
     foreach ($line in $currentMods) {
         if ($line -match 'mod\s*=\s*([^,;]+)') {
-            $modId = ($matches[1] -replace '\s*}.*$', '').Trim()
-            if ($modId -and ($installedIds -notcontains $modId)) {
-                $missingMods += $modId
-                continue # Skip missing mod
+            $mId = ($matches[1] -replace '\s*}.*$', '').Trim()
+            if ($mId -and ($activeModList -notcontains $mId)) {
+                $activeModList += $mId
             }
         }
-        $cleanedLines += $line
     }
 
-    if ($missingMods.Count -eq 0) {
-        Write-Host " [OK] All mods in savegame are verified installed on disk. No phantom mods found!" -ForegroundColor Green
+    $missingMods = @($activeModList | Where-Object { $installedIds -notcontains $_ })
+
+    # If Headless CLI mode, automatically execute phantom mod purge
+    if ($Headless) {
+        if ($missingMods.Count -eq 0) {
+            Write-Host " [OK] All mods in savegame are verified installed on disk. No phantom mods found!" -ForegroundColor Green
+            return
+        }
+        Write-Host " [!] Found $($missingMods.Count) phantom/missing mod(s) in savegame:" -ForegroundColor Yellow
+        foreach ($m in $missingMods) {
+            Write-Host "     - $m" -ForegroundColor DarkYellow
+        }
+        $bakFile = "$modsFile.bak"
+        if (-not (Test-Path $bakFile)) {
+            Copy-Item $modsFile $bakFile -Force
+            Write-Host " [OK] Backed up original mods.txt to mods.txt.bak" -ForegroundColor Gray
+        }
+        $cleanedLines = @()
+        foreach ($line in $currentMods) {
+            if ($line -match 'mod\s*=\s*([^,;]+)') {
+                $mId = ($matches[1] -replace '\s*}.*$', '').Trim()
+                if ($mId -and ($missingMods -contains $mId)) {
+                    continue
+                }
+            }
+            $cleanedLines += $line
+        }
+        $cleanedLines | Out-File -FilePath $modsFile -Encoding ascii
+        Write-Host "`n [SUCCESS] Removed $($missingMods.Count) uninstalled mod(s) from savegame!" -ForegroundColor Green
         return
     }
 
-    Write-Host " [!] Found $($missingMods.Count) phantom/missing mod(s) in savegame:" -ForegroundColor Yellow
-    foreach ($m in $missingMods) {
-        Write-Host "     - $m" -ForegroundColor DarkYellow
+    # Interactive Sub-Menu
+    Write-Host "`n-----------------------------------------------------------------" -ForegroundColor Cyan
+    Write-Host "   SAVEGAME MOD SANITIZER & PHANTOM PURGER (v2.18.0)             " -ForegroundColor Yellow
+    Write-Host "-----------------------------------------------------------------" -ForegroundColor Cyan
+    Write-Host " Active Savegame : $saveName" -ForegroundColor White
+    Write-Host " Save Path       : $modsFile" -ForegroundColor DarkGray
+    Write-Host " Active Mods     : $($activeModList.Count) enabled in mods.txt" -ForegroundColor Cyan
+    if ($missingMods.Count -gt 0) {
+        Write-Host " Uninstalled     : $($missingMods.Count) phantom mod(s) detected!" -ForegroundColor Yellow
     }
 
-    # Backup original before modifying (preserves first clean backup)
-    $bakFile = "$modsFile.bak"
-    if (-not (Test-Path $bakFile)) {
-        Copy-Item $modsFile $bakFile -Force
-        Write-Host " [OK] Backed up original mods.txt to mods.txt.bak" -ForegroundColor Gray
+    Write-Host "`n Enabled Mods in this Save:" -ForegroundColor Cyan
+    for ($i = 0; $i -lt $activeModList.Count; $i++) {
+        $mId = $activeModList[$i]
+        $title = if ($installedTitles[$mId]) { " ($($installedTitles[$mId]))" } else { "" }
+        $status = if ($installedIds -contains $mId) { "[Installed]" } else { "[PHANTOM / MISSING FROM DISK]" }
+        $statusColor = if ($installedIds -contains $mId) { "White" } else { "Yellow" }
+        Write-Host "   [$($i + 1)] $mId$title $status" -ForegroundColor $statusColor
     }
-    $cleanedLines | Out-File -FilePath $modsFile -Encoding ascii
-    Write-Host "`n [SUCCESS] Removed $($missingMods.Count) uninstalled mod(s) from savegame!" -ForegroundColor Green
-    Write-Host "           Clean save will now boot faster." -ForegroundColor Gray
+
+    Write-Host "`n Actions:" -ForegroundColor Cyan
+    Write-Host "  [1] Auto-Purge Uninstalled Phantom Mods (Removes missing mods only)" -ForegroundColor White
+    Write-Host "  [2] Selectively Disable / Remove an Enabled Mod from this Save" -ForegroundColor White
+    Write-Host "  [3] Restore Savegame Backup (mods.txt.bak)" -ForegroundColor White
+    Write-Host "  [0] Back to Main Menu" -ForegroundColor Gray
+
+    $actionChoice = Read-Host "`n Select an option (0-3)"
+    switch ($actionChoice.Trim()) {
+        "1" {
+            if ($missingMods.Count -eq 0) {
+                Write-Host "`n [OK] All $($activeModList.Count) mods in savegame are verified installed on disk." -ForegroundColor Green
+                Write-Host "      No uninstalled phantom mods found to purge!" -ForegroundColor Gray
+            } else {
+                Write-Host "`n [!] Found $($missingMods.Count) phantom/missing mod(s) to purge:" -ForegroundColor Yellow
+                foreach ($m in $missingMods) {
+                    Write-Host "     - $m" -ForegroundColor DarkYellow
+                }
+                $bakFile = "$modsFile.bak"
+                if (-not (Test-Path $bakFile)) {
+                    Copy-Item $modsFile $bakFile -Force
+                    Write-Host " [OK] Backed up original mods.txt to mods.txt.bak" -ForegroundColor Gray
+                }
+                $cleanedLines = @()
+                foreach ($line in $currentMods) {
+                    if ($line -match 'mod\s*=\s*([^,;]+)') {
+                        $mId = ($matches[1] -replace '\s*}.*$', '').Trim()
+                        if ($mId -and ($missingMods -contains $mId)) {
+                            continue
+                        }
+                    }
+                    $cleanedLines += $line
+                }
+                $cleanedLines | Out-File -FilePath $modsFile -Encoding ascii
+                Write-Host "`n [SUCCESS] Removed $($missingMods.Count) uninstalled phantom mod(s) from savegame!" -ForegroundColor Green
+            }
+        }
+        "2" {
+            Write-Host "`nEnter the number (1-$($activeModList.Count)) or mod ID to remove from this savegame:" -ForegroundColor Yellow
+            $modInput = (Read-Host "Mod selection").Trim()
+            $targetToRemove = $null
+            if ($modInput -match '^\d+$') {
+                $idx = [int]$modInput
+                if ($idx -ge 1 -and $idx -le $activeModList.Count) {
+                    $targetToRemove = $activeModList[$idx - 1]
+                }
+            } elseif ($activeModList -contains $modInput) {
+                $targetToRemove = $modInput
+            }
+
+            if ($targetToRemove) {
+                $bakFile = "$modsFile.bak"
+                if (-not (Test-Path $bakFile)) {
+                    Copy-Item $modsFile $bakFile -Force
+                    Write-Host " [OK] Backed up original mods.txt to mods.txt.bak" -ForegroundColor Gray
+                }
+                $cleanedLines = @()
+                foreach ($line in $currentMods) {
+                    if ($line -match 'mod\s*=\s*([^,;]+)') {
+                        $mId = ($matches[1] -replace '\s*}.*$', '').Trim()
+                        if ($mId -eq $targetToRemove) {
+                            continue
+                        }
+                    }
+                    $cleanedLines += $line
+                }
+                $cleanedLines | Out-File -FilePath $modsFile -Encoding ascii
+                Write-Host "`n [SUCCESS] Successfully removed '$targetToRemove' from savegame!" -ForegroundColor Green
+                Write-Host "           Savegame: $saveName" -ForegroundColor Cyan
+                Write-Host "           Backup  : $bakFile" -ForegroundColor DarkGray
+                Write-Host "           Project Zomboid will now boot without loading '$targetToRemove'." -ForegroundColor Gray
+            } else {
+                Write-Host "`n [!] Invalid mod selection. No changes made." -ForegroundColor Red
+            }
+        }
+        "3" {
+            $bakFile = "$modsFile.bak"
+            if (Test-Path $bakFile) {
+                Copy-Item $bakFile $modsFile -Force
+                Write-Host "`n [SUCCESS] Restored original mods.txt from $bakFile!" -ForegroundColor Green
+            } else {
+                Write-Host "`n [!] No mods.txt.bak backup found in save folder: $saveDir" -ForegroundColor Yellow
+            }
+        }
+        Default {
+            Write-Host " Returning to main menu." -ForegroundColor Gray
+        }
+    }
 }
 
 # ==============================================================================
@@ -1535,7 +1667,7 @@ function Build-FreezeCluster($frames) {
 # ==============================================================================
 function Invoke-PZScanEngine([string]$CustomServerIni = "", [switch]$LocalWorkshopOnly, [string]$CustomWorkshopPath = "", [string]$CustomLog = "") {
     Write-Host "`n=================================================================" -ForegroundColor Cyan
-    Write-Host "   PROJECT ZOMBOID MOD PERFORMANCE & OPTIMIZATION SUITE v2.17.0 " -ForegroundColor Yellow
+    Write-Host "   PROJECT ZOMBOID MOD PERFORMANCE & OPTIMIZATION SUITE v2.18.0 " -ForegroundColor Yellow
     Write-Host "         Created by @KodeMannn with the help of Gemini          " -ForegroundColor DarkCyan
     Write-Host "=================================================================`n" -ForegroundColor Cyan
 
@@ -3130,7 +3262,7 @@ function Invoke-PZScanEngine([string]$CustomServerIni = "", [switch]$LocalWorksh
     $md = @()
     $md += "# Project Zomboid Mod Performance & Optimization Diagnostic Report"
     $hostName = if ($env:COMPUTERNAME) { $env:COMPUTERNAME } elseif ($env:HOSTNAME) { $env:HOSTNAME } else { [System.Net.Dns]::GetHostName() }
-    $md += "*Generated: $(Get-Date -Format 'yyyy-MM-dd HH:mm:ss') on $hostName by PZ-Mod-Performance-Suite v2.17.0 (Coded with the help of Google Gemini)*"
+    $md += "*Generated: $(Get-Date -Format 'yyyy-MM-dd HH:mm:ss') on $hostName by PZ-Mod-Performance-Suite v2.18.0 (Coded with the help of Google Gemini)*"
     $md += ""
     $md += "## Executive Summary"
     $md += "- **Game Version:** $pzVersion"
@@ -3568,7 +3700,7 @@ function Show-PZMainMenu {
     while ($true) {
         Clear-Host
         Write-Host "=================================================================" -ForegroundColor Cyan
-        Write-Host "   PROJECT ZOMBOID MOD PERFORMANCE & OPTIMIZATION SUITE v2.17.0 " -ForegroundColor Yellow
+        Write-Host "   PROJECT ZOMBOID MOD PERFORMANCE & OPTIMIZATION SUITE v2.18.0 " -ForegroundColor Yellow
         Write-Host "         Created by @KodeMannn with the help of Gemini          " -ForegroundColor DarkCyan
         Write-Host "=================================================================" -ForegroundColor Cyan
         Write-Host "  [1] Run Full Performance Diagnostic Scan (Active Save)" -ForegroundColor White
@@ -3576,7 +3708,7 @@ function Show-PZMainMenu {
         Write-Host "  [3] Scan Local Workshop Mods (Zomboid\Workshop)" -ForegroundColor White
         Write-Host "  [4] One-Click Java GC Optimizer (Apply G1GC + 5ms Pause Tuning)" -ForegroundColor White
         Write-Host "  [5] Safe Frame Cap Optimizer (Reduce Lua Tick Multiplier)" -ForegroundColor White
-        Write-Host "  [6] Clean Phantom / Missing Mods from Savegame" -ForegroundColor White
+        Write-Host "  [6] Savegame Mod Sanitizer (Purge Phantoms / Selectively Remove Mods)" -ForegroundColor White
         Write-Host "  [7] Revert Changes / Restore Backups (JVM, FPS, Savegame)" -ForegroundColor Yellow
         Write-Host "  [8] Open Last Generated Diagnostic Report" -ForegroundColor White
         Write-Host "  [9] Configure Custom Steam Workshop / Mod Path" -ForegroundColor White
@@ -3708,7 +3840,7 @@ if ($Revert) {
 } elseif ($CapFPS -gt 0) {
     Set-PZFrameCap $CapFPS
 } elseif ($CleanSave) {
-    Invoke-PZCleanSaveMods
+    Invoke-PZCleanSaveMods -Headless
 } elseif ($LocalWorkshop) {
     Invoke-PZScanEngine -LocalWorkshopOnly -CustomWorkshopPath $CustomWorkshopPath -CustomLog $CustomLogPath
 } elseif ($ServerConfigPath) {
