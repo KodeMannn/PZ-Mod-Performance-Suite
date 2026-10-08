@@ -2,7 +2,7 @@
 @echo off
 title Project Zomboid Mod Performance ^& Optimization Suite v2.19.0
 color 0F
-powershell -NoProfile -ExecutionPolicy Bypass -Command & ([scriptblock]::Create([System.IO.File]::ReadAllText('%~f0'))) %*
+powershell -NoProfile -ExecutionPolicy Bypass -Command "& ([scriptblock]::Create([System.IO.File]::ReadAllText('%~f0'))) %*"
 echo.
 pause
 exit /b
