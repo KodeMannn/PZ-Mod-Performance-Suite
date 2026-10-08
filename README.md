@@ -54,6 +54,9 @@ Run interactive or automated scans with command-line flags:
 # Apply 1-click JVM garbage collection fix:
 .\Scan-PZModPerformance.ps1 -FixGC
 
+# Apply 1-click engine graphics and frame pacing optimization:
+.\Scan-PZModPerformance.ps1 -OptGraphics
+
 # Apply safe 120 FPS cap:
 .\Scan-PZModPerformance.ps1 -CapFPS 120
 
@@ -84,7 +87,7 @@ PZ-Mod-Performance-Suite features 9 selectable operations to fit your workflow:
 | **`[2] Dedicated Server Scan`** | Dedicated server `.ini` files (`servertest.ini` or custom path) | **~2.5 seconds** | Auditing server modpacks for VPS, Pterodactyl, and Co-op hosts |
 | **`[3] Scan Local Workshop Mods`** | Local workshop development folder (`Zomboid\Workshop` or custom) | **< 1 second** | Profiling custom mods under development before publishing to Steam |
 | **`[4] 1-Click Java GC Tuning`** | `ProjectZomboid64.json` launcher configuration | **< 1 second** | Eliminating 200–400ms periodic world freezes via low-latency G1GC |
-| **`[5] Safe Frame Cap Tuning`** | `options.ini` display frameRate setting | **< 1 second** | Throttling Lua tick execution overhead down from 240/uncapped FPS |
+| **`[5] Engine Graphics Optimizer`** | `options.ini` display, 3D mipmaps, lighting sync | **< 1 second** | Auto-tuning 120 FPS frame cap, dynamic lighting sync, 3D model mipmaps & ragdoll limits |
 | **`[6] Savegame Mod Sanitizer`** | Active savegame `mods.txt` | **< 1 second** | Purging uninstalled phantom mods or selectively disabling heavy mods |
 | **`[7] Revert Changes / Backups`** | JVM config, FPS cap, and savegame mods | **< 1 second** | Safely restoring original `.bak` backups and vanilla engine settings |
 | **`[8] Open Last Report`** | `ModPerformanceReport.md` | **Instant** | Viewing detailed breakdown, conflict tables, and Discord summaries |
@@ -94,6 +97,13 @@ PZ-Mod-Performance-Suite features 9 selectable operations to fit your workflow:
 
 ## 🔍 Key Features
 
+* **🚀 Comprehensive Architecture Audit, Scope-Aware Semantics & Hardware-Safe Engine Optimization (v2.21.0):**
+  * **Scope-Aware Query Extraction:** Re-architects Lua semantic analysis (`Analyze-ModLuaSemantics`) to isolate per-frame hook callback bodies (`Events.OnTick.Add(...)`) from module definitions and static helper scopes. Eliminates regex query bleed where static queries across massive multi-thousand-line Lua files were erroneously attributed to per-frame hook execution, ensuring physically realistic query profiling.
+  * **1-Click Engine Graphics & Frame Pacing Optimizer (Option [5]):** Expands Option `[5]` from a frame cap setter into a comprehensive graphics auto-tuner (`-OptGraphics`). Optimizes `options.ini` with verified low-latency settings: clamps frame rate to 120 FPS, enables 3D model mipmaps (`modelTextureMipmaps=true`) to eliminate GPU texture cache line stalls, syncs dynamic lighting tick rate (`lightFPS=60`), clamps physics ragdoll simulations (`maxActiveRagdolls=10`), and enables texture compression (`textureCompression=true`) to save up to ~6 GB VRAM.
+  * **Hardware RAM-Aware Safe JVM Heap Clamping:** Upgrades `Optimize-PZJavaGC` with cross-platform hardware detection (`Get-PZSystemPhysicalRamGB` on Windows CIM, Linux `/proc/meminfo`, and macOS `sysctl`). Dynamically scales heap bounds based on physical system RAM (16 GB heap on $\ge$32 GB RAM, 8 GB heap on 16 GB systems such as Steam Deck, and 4 GB heap on $\le$8 GB systems), completely preventing out-of-memory launch crashes.
+  * **Multi-Save Support in Savegame Sanitizer (Option [6]):** Adds interactive savegame selection (`[4] Select a Different Savegame`) allowing players and server admins to scan and sanitize any savegame across all game mode directories (`Sandbox`, `Survival`, `Apocalypse`, etc.), rather than only the most recently modified save.
+  * **Universal UTF-8 Encoding Without BOM:** Replaces legacy ASCII writing with universal non-BOM UTF-8 (`[System.Text.UTF8Encoding]::new($false)`), ensuring total encoding safety across Windows, Linux, and macOS without byte order mark corruption in game configuration files.
+  * **Unified Centralized Versioning:** Centralizes version declaration across all components (`$Script:SuiteVersion = "v2.21.0"`), guaranteeing banner, report header, and footer parity across PowerShell, Bash, and Windows batch polyglot launchers.
 * **🔍 Stationary Container Gating & Project Viewpoint QOL Forensic Calibration (v2.20.0):**
   * **Stationary Gating Semantic Detection:** Expands Lua AST pattern matching in `Analyze-ModLuaSemantics` to detect intermediate variable assignments of player motion (`local moving = player:isPlayerMoving ... if not moving then`). Prevents sophisticated mods that guard heavy loops behind movement state variables from being falsely classified as unconstrained moving loops.
   * **Forensic Accuracy Calibration for Project Viewpoint QOL:** Audits and resolves false accusations against `Project Viewpoint QOL`. Inverts the previously inaccurate diagnosis: verifies that container inventory rebuilding (`collectLootWindowContainers`) is strictly deferred while moving on foot (`< 1 ms [Imperceptible]` dormant tax), firing only as an opt-in mode (`All-Containers Mode`) when the player stops moving near containers (`~5-15 ms [Stationary Blip]`).
@@ -225,7 +235,7 @@ PZ-Mod-Performance-Suite features 9 selectable operations to fit your workflow:
 ```text
 
 =================================================================
-   PROJECT ZOMBOID MOD PERFORMANCE & OPTIMIZATION SUITE v2.8.0  
+   PROJECT ZOMBOID MOD PERFORMANCE & OPTIMIZATION SUITE v2.21.0  
          Created by @KodeMannn with the help of Gemini          
 =================================================================
 

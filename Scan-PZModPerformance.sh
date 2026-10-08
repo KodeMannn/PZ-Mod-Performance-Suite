@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # ==============================================================================
-# PROJECT ZOMBOID MOD PERFORMANCE & OPTIMIZATION SUITE v2.20.0
+# PROJECT ZOMBOID MOD PERFORMANCE & OPTIMIZATION SUITE v2.21.0
 # Cross-Platform Launcher for Linux (including Steam Deck / SteamOS) & macOS
 # Created by @KodeMannn with the help of Gemini
 # ==============================================================================
@@ -9,6 +9,7 @@ set -e
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PS_SCRIPT="$SCRIPT_DIR/Scan-PZModPerformance.ps1"
+VERSION="v2.21.0"
 
 # ANSI Colors
 CYAN='\033[0;36m'
@@ -37,7 +38,7 @@ fi
 
 # 3. Interactive Zero-Root / Package Manager Helper
 echo -e "${CYAN}=================================================================${NC}"
-echo -e "${YELLOW}   PROJECT ZOMBOID MOD PERFORMANCE & OPTIMIZATION SUITE v2.18.0  ${NC}"
+echo -e "${YELLOW}   PROJECT ZOMBOID MOD PERFORMANCE & OPTIMIZATION SUITE ${VERSION}  ${NC}"
 echo -e "${CYAN}         Cross-Platform Runner for Linux & macOS                 ${NC}"
 echo -e "${CYAN}=================================================================${NC}"
 echo ""

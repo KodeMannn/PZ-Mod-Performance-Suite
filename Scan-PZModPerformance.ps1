@@ -1,6 +1,6 @@
 <#
 .SYNOPSIS
-    Project Zomboid Mod Performance & Optimization Suite v2.20.0
+    Project Zomboid Mod Performance & Optimization Suite v2.21.0
 .DESCRIPTION
     Comprehensive diagnostic scanner and optimization toolkit for Project Zomboid (Build 42 & 41).
     Features Precision Slow Frame Anatomy Dissection (Main vs Render Thread, GC pauses vs Chunk Cache),
@@ -23,12 +23,14 @@ param(
     [string]$ServerConfigPath = "",
     [switch]$FixGC,
     [int]$CapFPS = 0,
+    [switch]$OptGraphics,
     [switch]$LocalWorkshop,
     [string]$CustomWorkshopPath = "",
     [switch]$CleanSave,
     [string]$Revert = ""
 )
 
+$Script:SuiteVersion = "v2.21.0"
 $ErrorActionPreference = "SilentlyContinue"
 
 # Cross-platform OS & User Home Directory Detection
@@ -192,6 +194,28 @@ function Get-PZInstallPath {
     return $null
 }
 
+function Get-PZSystemPhysicalRamGB {
+    try {
+        if ($isWindows) {
+            $cs = Get-CimInstance Win32_ComputerSystem -ErrorAction SilentlyContinue
+            if ($cs -and $cs.TotalPhysicalMemory) {
+                return [math]::Round($cs.TotalPhysicalMemory / 1GB, 1)
+            }
+        } elseif ($isLinux -and (Test-Path "/proc/meminfo")) {
+            $memLine = Get-Content "/proc/meminfo" -ErrorAction SilentlyContinue | Where-Object { $_ -match '^MemTotal:\s*(\d+)' } | Select-Object -First 1
+            if ($memLine -match '^MemTotal:\s*(\d+)') {
+                return [math]::Round([double]$matches[1] / 1048576, 1)
+            }
+        } elseif ($isMacOS) {
+            $memBytes = & sysctl -n hw.memsize 2>$null
+            if ($memBytes -match '^\d+$') {
+                return [math]::Round([double]$memBytes / 1GB, 1)
+            }
+        }
+    } catch {}
+    return 16.0 # safe fallback
+}
+
 function Get-PZJvmStatus {
     $status = [PSCustomObject]@{
         InstalledJsonFound = $false
@@ -217,16 +241,7 @@ function Get-PZJvmStatus {
         $json = $raw | ConvertFrom-Json
         $status.InstalledJsonFound = $true
 
-        # Scan vmArgs for -Xmx
-        if ($json.vmArgs) {
-            foreach ($arg in $json.vmArgs) {
-                if ($arg -match '^-Xmx(\d+[gmGM])') {
-                    $status.ConfiguredHeap = $matches[1].ToLower()
-                }
-            }
-        }
-
-        # Scan all OS vmArgs (windows, linux, macos)
+        # Scan all OS vmArgs (windows, linux, macos) and root vmArgs
         $allVmArgs = @()
         if ($json.vmArgs) { $allVmArgs += $json.vmArgs }
         if ($json.windows) {
@@ -241,6 +256,9 @@ function Get-PZJvmStatus {
         if ($json.macos -and $json.macos.vmArgs) { $allVmArgs += $json.macos.vmArgs }
 
         foreach ($arg in $allVmArgs) {
+            if ($arg -match '^-Xmx(\d+[gmGM])') {
+                $status.ConfiguredHeap = $matches[1].ToLower()
+            }
             if ($arg -match '-XX:\+UseG1GC') { $status.IsG1GC = $true }
             if ($arg -match '-XX:\+UseZGC') { $status.GcType = "ZGC (Vanilla B42 Default)" }
             if ($arg -match '-XX:MaxGCPauseMillis=(\d+)') { $status.HasPauseTarget = $true }
@@ -513,7 +531,16 @@ function Invoke-PZFixGC {
         }
         $json = $raw | ConvertFrom-Json
 
-        # Heap calculation: Clamp oversized heaps (>16g) to eliminate multi-hundred ms G1GC sweeps, or elevate low heaps (<16g) up to 16GB
+        # Heap calculation: Dynamically determine safe hardware heap bounds based on physical system RAM
+        $systemRamGB = Get-PZSystemPhysicalRamGB
+        $optimalHeapGB = if ($systemRamGB -ge 28.0) { 16 }
+                        elseif ($systemRamGB -ge 14.0) { 8 }
+                        else { 4 }
+        $optimalHeapArg = "-Xmx${optimalHeapGB}g"
+        $optimalHeapMB = $optimalHeapGB * 1024
+
+        Write-Host " [INFO] Detected System RAM: ${systemRamGB} GB -> Optimal Safe Java Heap: ${optimalHeapGB} GB" -ForegroundColor Gray
+
         $newArgs = @()
         $foundXmx = $false
         foreach ($arg in $json.vmArgs) {
@@ -522,23 +549,23 @@ function Invoke-PZFixGC {
                 $num = [int]$matches[1]
                 $unit = $matches[2].ToLower()
                 $existingMB = if ($unit -eq 'g') { $num * 1024 } else { $num }
-                if ($existingMB -gt 16384) {
-                    $newArgs += "-Xmx16g"
-                    Write-Host " [OPTIMIZE] Clamping oversized heap ($($num)$($unit.ToUpper())) down to 16GB (-Xmx16g) to eliminate 500ms+ GC sweeps!" -ForegroundColor Yellow
-                } elseif ($existingMB -lt 16384) {
-                    $newArgs += "-Xmx16g"
-                    Write-Host " [OPTIMIZE] Elevating heap ($($num)$($unit.ToUpper())) to 16GB (-Xmx16g) for modern modpacks." -ForegroundColor Cyan
+                if ($existingMB -gt $optimalHeapMB) {
+                    $newArgs += $optimalHeapArg
+                    Write-Host " [OPTIMIZE] Clamping oversized heap ($($num)$($unit.ToUpper())) down to safe hardware ceiling ${optimalHeapGB}GB ($optimalHeapArg) to eliminate 500ms+ GC sweeps!" -ForegroundColor Yellow
+                } elseif ($existingMB -lt $optimalHeapMB) {
+                    $newArgs += $optimalHeapArg
+                    Write-Host " [OPTIMIZE] Elevating heap ($($num)$($unit.ToUpper())) to optimal hardware ceiling ${optimalHeapGB}GB ($optimalHeapArg) for modern modpacks." -ForegroundColor Cyan
                 } else {
-                    $newArgs += "-Xmx16g"
-                    Write-Host " [OK] Heap already set to optimal 16GB (-Xmx16g)." -ForegroundColor Gray
+                    $newArgs += $optimalHeapArg
+                    Write-Host " [OK] Heap already set to optimal hardware ceiling ${optimalHeapGB}GB ($optimalHeapArg)." -ForegroundColor Gray
                 }
             } else {
                 $newArgs += $arg
             }
         }
         if (-not $foundXmx) {
-            $newArgs += "-Xmx16g"
-            Write-Host " [OPTIMIZE] Added -Xmx16g heap limit to vmArgs." -ForegroundColor Cyan
+            $newArgs += $optimalHeapArg
+            Write-Host " [OPTIMIZE] Added $optimalHeapArg heap limit to vmArgs." -ForegroundColor Cyan
         }
         $json.vmArgs = $newArgs
 
@@ -596,13 +623,13 @@ function Invoke-PZFixGC {
 }
 
 # ==============================================================================
-# Optimization Action: Safe Frame Cap Optimizer
+# Optimization Action: Engine Graphics & Frame Pacing Optimizer
 # ==============================================================================
-function Set-PZFrameCap([int]$targetFps) {
+function Set-PZOptionsSetting([string]$key, [string]$value) {
     $optionsIni = Join-Path $ZomboidUserPath "options.ini"
     if (-not (Test-Path $optionsIni)) {
         Write-Host " [!] options.ini not found at $optionsIni" -ForegroundColor Red
-        return
+        return $false
     }
 
     # Backup original before modifying
@@ -616,31 +643,170 @@ function Set-PZFrameCap([int]$targetFps) {
     $updated = $false
     $newLines = @()
     foreach ($line in $lines) {
-        if ($line -match '^frameRate=') {
-            $newLines += "frameRate=$targetFps"
+        if ($line -match "^$key=") {
+            $newLines += "$key=$value"
             $updated = $true
         } else {
             $newLines += $line
         }
     }
-    if ($updated) {
-        $newLines | Out-File -FilePath $optionsIni -Encoding ascii
+    if (-not $updated) {
+        $newLines += "$key=$value"
+    }
+
+    $utf8NoBom = [System.Text.UTF8Encoding]::new($false)
+    [System.IO.File]::WriteAllLines($optionsIni, $newLines, $utf8NoBom)
+    return $true
+}
+
+function Set-PZFrameCap([int]$targetFps) {
+    if (Set-PZOptionsSetting "frameRate" "$targetFps") {
         Write-Host " [SUCCESS] Game frame rate cap set to $targetFps FPS in options.ini!" -ForegroundColor Green
         Write-Host "           This directly throttles per-frame Lua tick execution overhead." -ForegroundColor Gray
-    } else {
-        Write-Host " [!] Could not locate frameRate setting in options.ini" -ForegroundColor Yellow
+    }
+}
+
+function Optimize-PZGraphicsAutoTune {
+    Write-Host "`n[*] Applying Recommended Engine Graphics & Frame Pacing Profile..." -ForegroundColor Yellow
+    $optionsIni = Join-Path $ZomboidUserPath "options.ini"
+    if (-not (Test-Path $optionsIni)) {
+        Write-Host " [!] options.ini not found at $optionsIni" -ForegroundColor Red
+        return
+    }
+
+    # Backup original before modifying
+    $bakPath = "$optionsIni.bak"
+    if (-not (Test-Path $bakPath)) {
+        Copy-Item $optionsIni $bakPath -Force
+        Write-Host " [OK] Backed up original display options to options.ini.bak" -ForegroundColor Gray
+    }
+
+    $settingsToApply = @{
+        'frameRate'           = '120'
+        'modelTextureMipmaps' = 'true'
+        'lightFPS'            = '60'
+        'maxActiveRagdolls'   = '10'
+        'textureCompression'  = 'true'
+    }
+
+    $lines = Get-Content $optionsIni -ErrorAction Stop
+    $seenKeys = @{}
+    $newLines = @()
+    foreach ($line in $lines) {
+        $matched = $false
+        foreach ($k in $settingsToApply.Keys) {
+            if ($line -match "^$k=") {
+                $newLines += "$k=$($settingsToApply[$k])"
+                $seenKeys[$k] = $true
+                $matched = $true
+                break
+            }
+        }
+        if (-not $matched) {
+            $newLines += $line
+        }
+    }
+
+    foreach ($k in $settingsToApply.Keys) {
+        if (-not $seenKeys.ContainsKey($k)) {
+            $newLines += "$k=$($settingsToApply[$k])"
+        }
+    }
+
+    $utf8NoBom = [System.Text.UTF8Encoding]::new($false)
+    [System.IO.File]::WriteAllLines($optionsIni, $newLines, $utf8NoBom)
+    Write-Host " [SUCCESS] Recommended graphics tuning applied to options.ini!" -ForegroundColor Green
+    Write-Host "   -> Frame Rate Cap          : 120 FPS (Smooth pacing & lower Lua tick multiplier)" -ForegroundColor Cyan
+    Write-Host "   -> 3D Model Mipmaps        : Enabled (Eliminates GPU cache thrashing & visual shimmer)" -ForegroundColor Cyan
+    Write-Host "   -> Dynamic Lighting Rate   : 60 FPS (Eliminates 30Hz light hitching during 120 FPS play)" -ForegroundColor Cyan
+    Write-Host "   -> Ragdoll Physics Ceiling : 10 Bodies (Prevents dense combat CPU physics stalls)" -ForegroundColor Cyan
+    Write-Host "   -> Texture Compression     : Enabled (Prevents PCIe VRAM saturation & texture thrashing)" -ForegroundColor Cyan
+    Write-Host "   Backup created at: $bakPath (restore anytime via Menu Option [7])" -ForegroundColor Gray
+}
+
+function Invoke-PZGraphicsOptimizer {
+    Write-Host "`n-----------------------------------------------------------------" -ForegroundColor Cyan
+    Write-Host "   ENGINE GRAPHICS & FRAME PACING OPTIMIZER                      " -ForegroundColor Yellow
+    Write-Host "-----------------------------------------------------------------" -ForegroundColor Cyan
+    Write-Host " Audits and resolves in-game options.ini performance bottlenecks." -ForegroundColor Gray
+    Write-Host "  [1] 1-Click Recommended Graphics Optimization (Auto-Tune)" -ForegroundColor Green
+    Write-Host "      -> 120 FPS Cap, Model Mipmaps ON, Lighting 60 FPS, Ragdolls 10, Compression ON" -ForegroundColor Gray
+    Write-Host "  [2] Change Display Frame Rate Cap (60 / 120 / 144 / 240 / Custom)" -ForegroundColor White
+    Write-Host "  [3] Enable 3D Model Mipmaps (modelTextureMipmaps=true)" -ForegroundColor White
+    Write-Host "  [4] Sync Dynamic Lighting Tick Rate (lightFPS=60)" -ForegroundColor White
+    Write-Host "  [5] Optimize Ragdoll Simulation Ceiling (maxActiveRagdolls=10)" -ForegroundColor White
+    Write-Host "  [6] Enable Texture Compression (textureCompression=true)" -ForegroundColor White
+    Write-Host "  [0] Back to Main Menu" -ForegroundColor Gray
+    Write-Host "-----------------------------------------------------------------" -ForegroundColor Cyan
+
+    $gChoice = Read-Host " Select an option (0-6)"
+    switch ($gChoice.Trim()) {
+        "1" {
+            Optimize-PZGraphicsAutoTune
+        }
+        "2" {
+            Write-Host "`nChoose Frame Rate Cap for Project Zomboid:" -ForegroundColor Cyan
+            Write-Host " [1] 60 FPS   (Recommended for heavy 100+ modpacks)" -ForegroundColor White
+            Write-Host " [2] 120 FPS  (Great balance for 120Hz/144Hz displays)" -ForegroundColor White
+            Write-Host " [3] 144 FPS  (Matches 144Hz refresh rate)" -ForegroundColor White
+            Write-Host " [4] 240 FPS  (High CPU tick overhead)" -ForegroundColor White
+            Write-Host " [5] Custom FPS" -ForegroundColor White
+            $fcChoice = Read-Host " Select option"
+            $fps = switch ($fcChoice.Trim()) {
+                "1" { 60 }
+                "2" { 120 }
+                "3" { 144 }
+                "4" { 240 }
+                "5" { [int](Read-Host " Enter custom FPS") }
+                Default { 120 }
+            }
+            if ($fps -gt 0) { Set-PZFrameCap $fps }
+        }
+        "3" {
+            if (Set-PZOptionsSetting "modelTextureMipmaps" "true") {
+                Write-Host " [SUCCESS] 3D Model Mipmaps enabled (modelTextureMipmaps=true)!" -ForegroundColor Green
+                Write-Host "           Eliminates texture cache thrashing and visual distance shimmering on custom 3D meshes." -ForegroundColor Gray
+            }
+        }
+        "4" {
+            if (Set-PZOptionsSetting "lightFPS" "60") {
+                Write-Host " [SUCCESS] Dynamic lighting tick rate increased to 60 FPS (lightFPS=60)!" -ForegroundColor Green
+                Write-Host "           Eliminates lighting dissonance and shadow judder when playing above 60 FPS." -ForegroundColor Gray
+            }
+        }
+        "5" {
+            if (Set-PZOptionsSetting "maxActiveRagdolls" "10") {
+                Write-Host " [SUCCESS] Ragdoll physics ceiling clamped to 10 bodies (maxActiveRagdolls=10)!" -ForegroundColor Green
+                Write-Host "           Prevents CPU physics computation spikes during dense horde combat." -ForegroundColor Gray
+            }
+        }
+        "6" {
+            if (Set-PZOptionsSetting "textureCompression" "true") {
+                Write-Host " [SUCCESS] Texture Compression enabled (textureCompression=true)!" -ForegroundColor Green
+                Write-Host "           Loads textures compressed in VRAM, preventing PCIe texture thrashing." -ForegroundColor Gray
+            }
+        }
+        Default {
+            Write-Host " Returning to main menu." -ForegroundColor Gray
+        }
     }
 }
 
 # ==============================================================================
 # Optimization Action: Clean Phantom / Missing Mods from Save
 # ==============================================================================
-function Invoke-PZCleanSaveMods([switch]$Headless) {
+function Invoke-PZCleanSaveMods([switch]$Headless, [string]$TargetSaveDir = "") {
     Write-Host "`n[*] Scanning savegame mod configuration..." -ForegroundColor Yellow
     $latestSaveIni = Join-Path $ZomboidUserPath "latestSave.ini"
     $saveDir = $null
     $saveName = "Unknown"
-    if (Test-Path $latestSaveIni) {
+
+    if ($TargetSaveDir -and (Test-Path $TargetSaveDir)) {
+        $saveDir = $TargetSaveDir
+        $leaf = Split-Path $saveDir -Leaf
+        $parent = Split-Path (Split-Path $saveDir) -Leaf
+        $saveName = if ($parent) { "$parent / $leaf" } else { $leaf }
+    } elseif (Test-Path $latestSaveIni) {
         $lines = Get-Content $latestSaveIni
         if ($lines.Count -ge 2) {
             $candidate = Join-Path $ZomboidUserPath "Saves\$($lines[1].Trim())\$($lines[0].Trim())"
@@ -736,14 +902,15 @@ function Invoke-PZCleanSaveMods([switch]$Headless) {
             }
             $cleanedLines += $line
         }
-        $cleanedLines | Out-File -FilePath $modsFile -Encoding ascii
+        $utf8NoBom = [System.Text.UTF8Encoding]::new($false)
+        [System.IO.File]::WriteAllLines($modsFile, $cleanedLines, $utf8NoBom)
         Write-Host "`n [SUCCESS] Removed $($missingMods.Count) uninstalled mod(s) from savegame!" -ForegroundColor Green
         return
     }
 
     # Interactive Sub-Menu
     Write-Host "`n-----------------------------------------------------------------" -ForegroundColor Cyan
-    Write-Host "   SAVEGAME MOD SANITIZER & PHANTOM PURGER (v2.18.0)             " -ForegroundColor Yellow
+    Write-Host "   SAVEGAME MOD SANITIZER & PHANTOM PURGER ($Script:SuiteVersion)             " -ForegroundColor Yellow
     Write-Host "-----------------------------------------------------------------" -ForegroundColor Cyan
     Write-Host " Active Savegame : $saveName" -ForegroundColor White
     Write-Host " Save Path       : $modsFile" -ForegroundColor DarkGray
@@ -765,9 +932,10 @@ function Invoke-PZCleanSaveMods([switch]$Headless) {
     Write-Host "  [1] Auto-Purge Uninstalled Phantom Mods (Removes missing mods only)" -ForegroundColor White
     Write-Host "  [2] Selectively Disable / Remove an Enabled Mod from this Save" -ForegroundColor White
     Write-Host "  [3] Restore Savegame Backup (mods.txt.bak)" -ForegroundColor White
+    Write-Host "  [4] Select a Different Savegame to Inspect or Clean" -ForegroundColor White
     Write-Host "  [0] Back to Main Menu" -ForegroundColor Gray
 
-    $actionChoice = Read-Host "`n Select an option (0-3)"
+    $actionChoice = Read-Host "`n Select an option (0-4)"
     switch ($actionChoice.Trim()) {
         "1" {
             if ($missingMods.Count -eq 0) {
@@ -793,7 +961,8 @@ function Invoke-PZCleanSaveMods([switch]$Headless) {
                     }
                     $cleanedLines += $line
                 }
-                $cleanedLines | Out-File -FilePath $modsFile -Encoding ascii
+                $utf8NoBom = [System.Text.UTF8Encoding]::new($false)
+                [System.IO.File]::WriteAllLines($modsFile, $cleanedLines, $utf8NoBom)
                 Write-Host "`n [SUCCESS] Removed $($missingMods.Count) uninstalled phantom mod(s) from savegame!" -ForegroundColor Green
             }
         }
@@ -826,7 +995,8 @@ function Invoke-PZCleanSaveMods([switch]$Headless) {
                     }
                     $cleanedLines += $line
                 }
-                $cleanedLines | Out-File -FilePath $modsFile -Encoding ascii
+                $utf8NoBom = [System.Text.UTF8Encoding]::new($false)
+                [System.IO.File]::WriteAllLines($modsFile, $cleanedLines, $utf8NoBom)
                 Write-Host "`n [SUCCESS] Successfully removed '$targetToRemove' from savegame!" -ForegroundColor Green
                 Write-Host "           Savegame: $saveName" -ForegroundColor Cyan
                 Write-Host "           Backup  : $bakFile" -ForegroundColor DarkGray
@@ -842,6 +1012,35 @@ function Invoke-PZCleanSaveMods([switch]$Headless) {
                 Write-Host "`n [SUCCESS] Restored original mods.txt from $bakFile!" -ForegroundColor Green
             } else {
                 Write-Host "`n [!] No mods.txt.bak backup found in save folder: $saveDir" -ForegroundColor Yellow
+            }
+        }
+        "4" {
+            $savesRoot = Join-Path $ZomboidUserPath "Saves"
+            if (-not (Test-Path $savesRoot)) {
+                Write-Host "`n [!] Saves folder not found at $savesRoot" -ForegroundColor Yellow
+                return
+            }
+            $availableSaves = @(Get-ChildItem -Path $savesRoot -Recurse -Filter "mods.txt" -File -ErrorAction SilentlyContinue |
+                Sort-Object LastWriteTime -Descending)
+            if ($availableSaves.Count -eq 0) {
+                Write-Host "`n [!] No savegames with mods.txt found." -ForegroundColor Yellow
+                return
+            }
+            Write-Host "`nAvailable Savegames:" -ForegroundColor Cyan
+            for ($sIdx = 0; $sIdx -lt $availableSaves.Count; $sIdx++) {
+                $sf = $availableSaves[$sIdx]
+                $sFolder = $sf.Directory.Name
+                $sMode = $sf.Directory.Parent.Name
+                $sTime = $sf.LastWriteTime.ToString("yyyy-MM-dd HH:mm")
+                Write-Host " [$($sIdx + 1)] $sMode / $sFolder ($sTime)" -ForegroundColor White
+            }
+            $sChoice = Read-Host "`nSelect savegame number (1-$($availableSaves.Count))"
+            if ($sChoice -match '^\d+$' -and [int]$sChoice -ge 1 -and [int]$sChoice -le $availableSaves.Count) {
+                $chosenSaveDir = $availableSaves[[int]$sChoice - 1].DirectoryName
+                Invoke-PZCleanSaveMods -TargetSaveDir $chosenSaveDir
+                return
+            } else {
+                Write-Host "`n [!] Invalid selection." -ForegroundColor Red
             }
         }
         Default {
@@ -938,7 +1137,8 @@ function Revert-PZFrameCap {
                 }
             }
             if ($found) {
-                $newLines | Out-File -FilePath $optionsIni -Encoding ascii
+                $utf8NoBom = [System.Text.UTF8Encoding]::new($false)
+                [System.IO.File]::WriteAllLines($optionsIni, $newLines, $utf8NoBom)
                 Write-Host " [SUCCESS] Reset frameRate to 240 FPS (Project Zomboid default) in options.ini." -ForegroundColor Green
             }
         } else {
@@ -1106,24 +1306,7 @@ function Analyze-ModLuaSemantics([System.IO.FileInfo[]]$luaFiles) {
         $jniPattern = 'luajava\.bindClass|Class\.forName|\.getDeclaredMethod|\.getMethod|\.invoke\(|ViewpointQOLSettings'
         $jni = ([regex]::Matches($code, $jniPattern)).Count
 
-        if ($hasPerFrame) {
-            $inHookZombieQueries += $zq
-            $inHookTileQueries += $tq
-            $inHookWorldQueries += $wq
-            $inHookInvQueries += $iq
-            $inHookHeavyContainers += $hc
-            $inHookUIPolls += $uiPoll
-            $inHookJNICalls += $jni
-        } else {
-            $staticZombieQueries += $zq
-            $staticTileQueries += $tq
-            $staticWorldQueries += $wq
-            $staticInvQueries += $iq
-            $staticHeavyContainers += $hc
-            $staticUIPolls += $uiPoll
-            $staticJNICalls += $jni
-        }
-
+        $hookCodeBlocks = @()
         foreach ($m in $addMatches) {
             $hookEvent = $m.Groups[1].Value
             $funcName = $m.Groups[2].Value
@@ -1154,6 +1337,7 @@ function Analyze-ModLuaSemantics([System.IO.FileInfo[]]$luaFiles) {
                     }
                     if ($fMatch.Success -and $fMatch.Groups[1].Value.Length -gt 15) {
                         $targetCode = $fMatch.Groups[1].Value
+                        $hookCodeBlocks += $targetCode
                     }
                 }
 
@@ -1175,6 +1359,50 @@ function Analyze-ModLuaSemantics([System.IO.FileInfo[]]$luaFiles) {
                     $hookBreakdown += "$hookEvent (Permanent Loop)"
                 }
             }
+        }
+
+        # Query Isolation: Scope-aware queries
+        if ($hasPerFrame -and $hookCodeBlocks.Count -gt 0) {
+            $hookCodeJoined = $hookCodeBlocks -join "`n"
+            $hZq = [math]::Min($zq, ([regex]::Matches($hookCodeJoined, 'getZombieList|getMovingObjects|getCharacters|getZombies|getHitReaction|getNearZombies')).Count)
+            $hTq = [math]::Min($tq, ([regex]::Matches($hookCodeJoined, 'getSquare|getGridSquare|getIsoObject|getCell\(\):getGridSquare')).Count)
+            $hIq = [math]::Min($iq, ([regex]::Matches($hookCodeJoined, "getAllItems|getItems|FindAndReturn|$heavyContainerPattern")).Count)
+            $hHc = [math]::Min($hc, ([regex]::Matches($hookCodeJoined, $heavyContainerPattern)).Count)
+            $hUi = [math]::Min($uiPoll, ([regex]::Matches($hookCodeJoined, $uiPollPattern)).Count)
+            $hJni = [math]::Min($jni, ([regex]::Matches($hookCodeJoined, $jniPattern)).Count)
+
+            $inHookZombieQueries += $hZq
+            $inHookTileQueries += $hTq
+            $inHookWorldQueries += ($hZq + $hTq)
+            $inHookInvQueries += $hIq
+            $inHookHeavyContainers += $hHc
+            $inHookUIPolls += $hUi
+            $inHookJNICalls += $hJni
+
+            $staticZombieQueries += [math]::Max(0, $zq - $hZq)
+            $staticTileQueries += [math]::Max(0, $tq - $hTq)
+            $staticWorldQueries += [math]::Max(0, $wq - ($hZq + $hTq))
+            $staticInvQueries += [math]::Max(0, $iq - $hIq)
+            $staticHeavyContainers += [math]::Max(0, $hc - $hHc)
+            $staticUIPolls += [math]::Max(0, $uiPoll - $hUi)
+            $staticJNICalls += [math]::Max(0, $jni - $hJni)
+        } elseif ($hasPerFrame) {
+            # Anonymous function or unisolated hook handler: conservative file fallback
+            $inHookZombieQueries += $zq
+            $inHookTileQueries += $tq
+            $inHookWorldQueries += $wq
+            $inHookInvQueries += $iq
+            $inHookHeavyContainers += $hc
+            $inHookUIPolls += $uiPoll
+            $inHookJNICalls += $jni
+        } else {
+            $staticZombieQueries += $zq
+            $staticTileQueries += $tq
+            $staticWorldQueries += $wq
+            $staticInvQueries += $iq
+            $staticHeavyContainers += $hc
+            $staticUIPolls += $uiPoll
+            $staticJNICalls += $jni
         }
     }
 
@@ -1759,7 +1987,7 @@ function Build-FreezeCluster($frames) {
 # ==============================================================================
 function Invoke-PZScanEngine([string]$CustomServerIni = "", [switch]$LocalWorkshopOnly, [string]$CustomWorkshopPath = "", [string]$CustomLog = "") {
     Write-Host "`n=================================================================" -ForegroundColor Cyan
-    Write-Host "   PROJECT ZOMBOID MOD PERFORMANCE & OPTIMIZATION SUITE v2.20.0 " -ForegroundColor Yellow
+    Write-Host "   PROJECT ZOMBOID MOD PERFORMANCE & OPTIMIZATION SUITE $Script:SuiteVersion " -ForegroundColor Yellow
     Write-Host "         Created by @KodeMannn with the help of Gemini          " -ForegroundColor DarkCyan
     Write-Host "=================================================================`n" -ForegroundColor Cyan
 
@@ -3391,7 +3619,7 @@ function Invoke-PZScanEngine([string]$CustomServerIni = "", [switch]$LocalWorksh
     $md = @()
     $md += "# Project Zomboid Mod Performance & Optimization Diagnostic Report"
     $hostName = if ($env:COMPUTERNAME) { $env:COMPUTERNAME } elseif ($env:HOSTNAME) { $env:HOSTNAME } else { [System.Net.Dns]::GetHostName() }
-    $md += "*Generated: $(Get-Date -Format 'yyyy-MM-dd HH:mm:ss') on $hostName by PZ-Mod-Performance-Suite v2.18.0 (Coded with the help of Google Gemini)*"
+    $md += "*Generated: $(Get-Date -Format 'yyyy-MM-dd HH:mm:ss') on $hostName by PZ-Mod-Performance-Suite $Script:SuiteVersion (Coded with the help of Google Gemini)*"
     $md += ""
     $md += "## Executive Summary"
     $md += "- **Game Version:** $pzVersion"
@@ -3841,14 +4069,14 @@ function Show-PZMainMenu {
         }
 
         Write-Host "=================================================================" -ForegroundColor Cyan
-        Write-Host "   PROJECT ZOMBOID MOD PERFORMANCE & OPTIMIZATION SUITE v2.20.0 " -ForegroundColor Yellow
+        Write-Host "   PROJECT ZOMBOID MOD PERFORMANCE & OPTIMIZATION SUITE $Script:SuiteVersion " -ForegroundColor Yellow
         Write-Host "         Created by @KodeMannn with the help of Gemini          " -ForegroundColor DarkCyan
         Write-Host "=================================================================" -ForegroundColor Cyan
         Write-Host "  [1] Run Full Performance Diagnostic Scan (Active Save)" -ForegroundColor White
         Write-Host "  [2] Scan Dedicated / Multiplayer Server Config (.ini)" -ForegroundColor White
         Write-Host "  [3] Scan Local Workshop Mods (Zomboid\Workshop)" -ForegroundColor White
         Write-Host "  [4] One-Click Java GC Optimizer $gcMenuBadge" -ForegroundColor $(if ($jvmStatusObj.IsFullyOptimized) { "Green" } elseif ($jvmStatusObj.IsG1GC) { "Cyan" } else { "White" })
-        Write-Host "  [5] Safe Frame Cap Optimizer (Reduce Lua Tick Multiplier)" -ForegroundColor White
+        Write-Host "  [5] Engine Graphics & Frame Pacing Optimizer (Frame Cap, 3D Mipmaps, Lighting Sync)" -ForegroundColor White
         Write-Host "  [6] Savegame Mod Sanitizer (Purge Phantoms / Selectively Remove Mods)" -ForegroundColor White
         Write-Host "  [7] Revert Changes / Restore Backups (JVM, FPS, Savegame)" -ForegroundColor Yellow
         Write-Host "  [8] Open Last Generated Diagnostic Report" -ForegroundColor White
@@ -3891,24 +4119,7 @@ function Show-PZMainMenu {
                 Read-Host | Out-Null
             }
             "5" {
-                Write-Host "`nChoose Frame Rate Cap for Project Zomboid:" -ForegroundColor Cyan
-                Write-Host " [1] 60 FPS   (Recommended for heavy 100+ modpacks)" -ForegroundColor White
-                Write-Host " [2] 120 FPS  (Great balance for 120Hz/144Hz displays)" -ForegroundColor White
-                Write-Host " [3] 144 FPS  (Matches 144Hz refresh rate)" -ForegroundColor White
-                Write-Host " [4] 240 FPS  (High CPU tick overhead)" -ForegroundColor White
-                Write-Host " [5] Custom FPS" -ForegroundColor White
-                $fcChoice = Read-Host " Select option"
-                $fps = switch ($fcChoice.Trim()) {
-                    "1" { 60 }
-                    "2" { 120 }
-                    "3" { 144 }
-                    "4" { 240 }
-                    "5" { [int](Read-Host " Enter custom FPS") }
-                    Default { 120 }
-                }
-                if ($fps -gt 0) {
-                    Set-PZFrameCap $fps
-                }
+                Invoke-PZGraphicsOptimizer
                 Write-Host "`nPress Enter to return to menu..." -ForegroundColor Gray
                 Read-Host | Out-Null
             }
@@ -3978,6 +4189,8 @@ if ($Revert) {
     Invoke-PZRevertChanges $Revert
 } elseif ($FixGC) {
     Invoke-PZFixGC
+} elseif ($OptGraphics) {
+    Optimize-PZGraphicsAutoTune
 } elseif ($CapFPS -gt 0) {
     Set-PZFrameCap $CapFPS
 } elseif ($CleanSave) {
