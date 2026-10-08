@@ -1,13 +1,14 @@
 <#
 .SYNOPSIS
-    Project Zomboid Mod Performance & Optimization Suite v2.16.0
+    Project Zomboid Mod Performance & Optimization Suite v2.17.0
 .DESCRIPTION
     Comprehensive diagnostic scanner and optimization toolkit for Project Zomboid (Build 42 & 41).
     Features Precision Slow Frame Anatomy Dissection (Main vs Render Thread, GC pauses vs Chunk Cache),
     Consecutive Freeze Cluster Analysis (Multi-Frame Chains), 3D Frustum & Geometry Telemetry (Draws/Frame, Bones, VRAM),
     In-Game Graphics Configuration Bottleneck Audit (options.ini), JVM Bytecode Patch & Hook Registry ([ZB]),
     Runtime Mod Error & Exception Attribution, GC Heap Churn Velocity, Causal Bottleneck Attribution,
-    Hardware & Thread Headroom Telemetry, Cross-Platform Linux/macOS/Windows Support, and 1-Click Engine Tuning.
+    Hardware & Thread Headroom Telemetry, Cross-Platform Linux/macOS/Windows Support, Multi-Drive Steam Library Discovery,
+    and 1-Click Engine Tuning.
 .AUTHOR
     KodeMannn (https://github.com/KodeMannn) - Coded with the assistance of Google Gemini
 #>
@@ -52,8 +53,75 @@ if (-not $ReportOutputPath) {
     }
 }
 
+$ConfigFilePath = Join-Path $ZomboidUserPath "pz_scanner_config.json"
+
 # ==============================================================================
-# Helper Functions: Steam & Library Discovery (Cross-Platform)
+# Helper Functions: Persistent Configuration & Custom Paths
+# ==============================================================================
+function Get-PZScannerConfig {
+    if (Test-Path $ConfigFilePath) {
+        try {
+            $raw = [System.IO.File]::ReadAllText($ConfigFilePath)
+            if ($raw) {
+                return (ConvertFrom-Json $raw -ErrorAction SilentlyContinue)
+            }
+        } catch {}
+    }
+    return [PSCustomObject]@{
+        CustomWorkshopPath = ""
+    }
+}
+
+function Set-PZScannerConfig([string]$customWsPath) {
+    try {
+        $cfg = Get-PZScannerConfig
+        if (-not $cfg) { $cfg = [PSCustomObject]@{} }
+        $cfg | Add-Member -NotePropertyName "CustomWorkshopPath" -NotePropertyValue $customWsPath -Force
+        $json = $cfg | ConvertTo-Json -Compress
+        [System.IO.File]::WriteAllText($ConfigFilePath, $json)
+        return $true
+    } catch {
+        return $false
+    }
+}
+
+# Load saved custom workshop path from configuration if not passed via CLI
+if (-not $CustomWorkshopPath) {
+    $savedCfg = Get-PZScannerConfig
+    if ($savedCfg -and $savedCfg.CustomWorkshopPath) {
+        $CustomWorkshopPath = $savedCfg.CustomWorkshopPath
+    }
+}
+
+function Resolve-CustomWorkshopPath([string]$path) {
+    if (-not $path) { return $null }
+    $clean = $path.Trim().Trim('"').Trim("'")
+    if (-not (Test-Path $clean)) { return $null }
+
+    # If path directly targets 108600 or contains 108600 directory
+    if ($clean -match '108600$' -or (Test-Path (Join-Path $clean "108600"))) {
+        if ($clean -match '108600$') { return $clean }
+        return (Join-Path $clean "108600")
+    }
+
+    # Steam library root containing steamapps/workshop/content/108600
+    $sub1 = Join-Path $clean "steamapps/workshop/content/108600"
+    if (Test-Path $sub1) { return $sub1 }
+    $sub1Win = Join-Path $clean "steamapps\workshop\content\108600"
+    if (Test-Path $sub1Win) { return $sub1Win }
+
+    # steamapps folder containing workshop/content/108600
+    $sub2 = Join-Path $clean "workshop/content/108600"
+    if (Test-Path $sub2) { return $sub2 }
+    $sub2Win = Join-Path $clean "workshop\content\108600"
+    if (Test-Path $sub2Win) { return $sub2Win }
+
+    # Custom folder containing mods directly
+    return $clean
+}
+
+# ==============================================================================
+# Helper Functions: Steam & Library Discovery (Cross-Platform & Multi-Drive)
 # ==============================================================================
 function Get-PZInstallPath {
     $candidates = @()
@@ -72,7 +140,39 @@ function Get-PZInstallPath {
             "/Applications/Project Zomboid.app/Contents/Java"
         )
     }
-    # Windows candidates
+
+    if ($isWindows) {
+        # Windows Registry Inspection (Direct Steam App 108600 Uninstall Entry)
+        $regKeys = @(
+            'HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall\Steam App 108600',
+            'HKLM:\SOFTWARE\WOW6432Node\Microsoft\Windows\CurrentVersion\Uninstall\Steam App 108600'
+        )
+        foreach ($rk in $regKeys) {
+            $regItem = Get-ItemProperty -Path $rk -ErrorAction SilentlyContinue
+            if ($regItem -and $regItem.InstallLocation) {
+                $candidates += $regItem.InstallLocation
+            }
+        }
+
+        # Dynamic Drive Scan across all ready logical drives (C:, D:, E:, F:, G:, etc.)
+        try {
+            $drives = [System.IO.DriveInfo]::GetDrives() | Where-Object { $_.IsReady } | Select-Object -ExpandProperty RootDirectory -ErrorAction SilentlyContinue
+            foreach ($d in $drives) {
+                $root = $d.FullName.TrimEnd('\')
+                $candidates += @(
+                    "$root\SteamLibrary\steamapps\common\ProjectZomboid",
+                    "$root\Steam\steamapps\common\ProjectZomboid",
+                    "$root\Games\SteamLibrary\steamapps\common\ProjectZomboid",
+                    "$root\Games\Steam\steamapps\common\ProjectZomboid",
+                    "$root\Program Files (x86)\Steam\steamapps\common\ProjectZomboid",
+                    "$root\Program Files\Steam\steamapps\common\ProjectZomboid",
+                    "$root\steamapps\common\ProjectZomboid"
+                )
+            }
+        } catch {}
+    }
+
+    # Static fallback Windows candidates
     $candidates += @(
         "C:\Program Files (x86)\Steam\steamapps\common\ProjectZomboid",
         "C:\Program Files\Steam\steamapps\common\ProjectZomboid",
@@ -81,40 +181,41 @@ function Get-PZInstallPath {
         "E:\SteamLibrary\steamapps\common\ProjectZomboid",
         "H:\SteamLibrary\steamapps\common\ProjectZomboid"
     )
+
     foreach ($c in $candidates) {
-        if ((Test-Path (Join-Path $c "ProjectZomboid64.json")) -or 
+        if ($c -and ((Test-Path (Join-Path $c "ProjectZomboid64.json")) -or 
             (Test-Path (Join-Path $c "projectzomboid.sh")) -or 
-            (Test-Path (Join-Path $c "Project Zomboid.app"))) { 
+            (Test-Path (Join-Path $c "Project Zomboid.app")))) { 
             return $c 
         }
     }
     return $null
 }
 
-function Get-WorkshopPaths {
+function Get-WorkshopPaths([string]$customPath = "") {
     $potential = @()
+
+    # 1. Custom workshop path if passed, scoped, or persistently configured
+    $cfgPath = if ($customPath) { $customPath } elseif ($script:CustomWorkshopPath) { $script:CustomWorkshopPath } else { (Get-PZScannerConfig).CustomWorkshopPath }
+    if ($cfgPath) {
+        $resolvedCustom = Resolve-CustomWorkshopPath $cfgPath
+        if ($resolvedCustom -and (Test-Path $resolvedCustom)) {
+            $potential += $resolvedCustom
+        }
+    }
+
+    # 2. Linux & macOS candidates
     if ($userHome) {
-        # Linux & Steam Deck candidates
         $potential += @(
             (Join-Path $userHome ".local/share/Steam/steamapps/workshop/content/108600"),
             (Join-Path $userHome ".steam/steam/steamapps/workshop/content/108600"),
             (Join-Path $userHome ".var/app/com.valvesoftware.Steam/.local/share/Steam/steamapps/workshop/content/108600"),
             (Join-Path $userHome "Steam/steamapps/workshop/content/108600"),
-            # macOS candidates
             (Join-Path $userHome "Library/Application Support/Steam/steamapps/workshop/content/108600")
         )
     }
-    # Windows candidates
-    $potential += @(
-        "C:\Program Files (x86)\Steam\steamapps\workshop\content\108600",
-        "C:\Program Files\Steam\steamapps\workshop\content\108600",
-        "D:\SteamLibrary\steamapps\workshop\content\108600",
-        "D:\Steam\steamapps\workshop\content\108600",
-        "E:\SteamLibrary\steamapps\workshop\content\108600",
-        "H:\SteamLibrary\steamapps\workshop\content\108600"
-    )
 
-    # Search for libraryfolders.vdf across all platforms
+    # 3. Collect libraryfolders.vdf candidates across all platforms, drives, and registries
     $vdfCandidates = @()
     if ($userHome) {
         $vdfCandidates += @(
@@ -124,24 +225,109 @@ function Get-WorkshopPaths {
             (Join-Path $userHome "Library/Application Support/Steam/steamapps/libraryfolders.vdf")
         )
     }
+
+    if ($isWindows) {
+        # Check Project Zomboid uninstall registry keys to locate Steam parent directory
+        $pzRegKeys = @(
+            'HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall\Steam App 108600',
+            'HKLM:\SOFTWARE\WOW6432Node\Microsoft\Windows\CurrentVersion\Uninstall\Steam App 108600'
+        )
+        foreach ($rk in $pzRegKeys) {
+            $regItem = Get-ItemProperty -Path $rk -ErrorAction SilentlyContinue
+            if ($regItem -and $regItem.InstallLocation) {
+                $steamApps = Split-Path (Split-Path $regItem.InstallLocation -Parent) -Parent
+                if ($steamApps -and (Test-Path $steamApps)) {
+                    $potential += (Join-Path $steamApps "workshop\content\108600")
+                    $vdfCandidates += (Join-Path $steamApps "libraryfolders.vdf")
+                }
+            }
+        }
+
+        # Check Valve Steam registry keys
+        $valveRegKeys = @(
+            @{ Path = 'HKCU:\Software\Valve\Steam'; Prop = 'SteamPath' },
+            @{ Path = 'HKLM:\SOFTWARE\WOW6432Node\Valve\Steam'; Prop = 'InstallPath' },
+            @{ Path = 'HKLM:\SOFTWARE\Valve\Steam'; Prop = 'InstallPath' }
+        )
+        foreach ($vr in $valveRegKeys) {
+            $vItem = Get-ItemProperty -Path $vr.Path -ErrorAction SilentlyContinue
+            if ($vItem) {
+                $steamRoot = $vItem.($vr.Prop)
+                if ($steamRoot -and (Test-Path $steamRoot)) {
+                    $potential += (Join-Path $steamRoot "steamapps\workshop\content\108600")
+                    $vdfCandidates += (Join-Path $steamRoot "steamapps\libraryfolders.vdf")
+                }
+            }
+        }
+
+        # Dynamic Logical Drive Enumeration for Windows (C:, D:, E:, F:, G:, etc.)
+        try {
+            $drives = [System.IO.DriveInfo]::GetDrives() | Where-Object { $_.IsReady } | Select-Object -ExpandProperty RootDirectory -ErrorAction SilentlyContinue
+            foreach ($d in $drives) {
+                $root = $d.FullName.TrimEnd('\')
+                $potential += @(
+                    "$root\SteamLibrary\steamapps\workshop\content\108600",
+                    "$root\Steam\steamapps\workshop\content\108600",
+                    "$root\Games\SteamLibrary\steamapps\workshop\content\108600",
+                    "$root\Games\Steam\steamapps\workshop\content\108600",
+                    "$root\Program Files (x86)\Steam\steamapps\workshop\content\108600",
+                    "$root\Program Files\Steam\steamapps\workshop\content\108600",
+                    "$root\steamapps\workshop\content\108600"
+                )
+                $vdfCandidates += @(
+                    "$root\SteamLibrary\steamapps\libraryfolders.vdf",
+                    "$root\Steam\steamapps\libraryfolders.vdf",
+                    "$root\Games\SteamLibrary\steamapps\libraryfolders.vdf",
+                    "$root\Games\Steam\steamapps\libraryfolders.vdf",
+                    "$root\Program Files (x86)\Steam\steamapps\libraryfolders.vdf",
+                    "$root\Program Files\Steam\steamapps\libraryfolders.vdf",
+                    "$root\steamapps\libraryfolders.vdf"
+                )
+            }
+        } catch {}
+    }
+
+    # Static fallback Windows candidates
+    $potential += @(
+        "C:\Program Files (x86)\Steam\steamapps\workshop\content\108600",
+        "C:\Program Files\Steam\steamapps\workshop\content\108600",
+        "D:\SteamLibrary\steamapps\workshop\content\108600",
+        "D:\Steam\steamapps\workshop\content\108600",
+        "E:\SteamLibrary\steamapps\workshop\content\108600",
+        "H:\SteamLibrary\steamapps\workshop\content\108600"
+    )
+
     $vdfCandidates += @(
         "C:\Program Files (x86)\Steam\steamapps\libraryfolders.vdf",
         "C:\Program Files\Steam\steamapps\libraryfolders.vdf"
     )
 
-    foreach ($vdfPath in $vdfCandidates) {
-        if (Test-Path $vdfPath) {
+    # 4. Search and parse all discovered libraryfolders.vdf files (both modern and legacy VDF)
+    foreach ($vdfPath in ($vdfCandidates | Select-Object -Unique)) {
+        if ($vdfPath -and (Test-Path $vdfPath)) {
             $vdfContent = Get-Content $vdfPath -ErrorAction SilentlyContinue
             foreach ($line in $vdfContent) {
+                $libPath = $null
                 if ($line -match '"path"\s+"([^"]+)"') {
-                    $libPath = $matches[1] -replace '\\\\', '/' -replace '\\', '/'
-                    $ws = Join-Path $libPath "steamapps/workshop/content/108600"
-                    if ($potential -notcontains $ws) { $potential += $ws }
+                    $libPath = $matches[1]
+                } elseif ($line -match '^\s*"[0-9]+"\s+"([^"]+)"') {
+                    $libPath = $matches[1]
+                }
+                if ($libPath) {
+                    $libPathClean = $libPath -replace '\\\\', '/' -replace '\\', '/'
+                    $candidateWs = @(
+                        (Join-Path $libPathClean "steamapps/workshop/content/108600"),
+                        (Join-Path $libPathClean "workshop/content/108600")
+                    )
+                    foreach ($cWs in $candidateWs) {
+                        if ($potential -notcontains $cWs) { $potential += $cWs }
+                    }
                 }
             }
         }
     }
-    return @($potential | Where-Object { Test-Path $_ })
+
+    return @($potential | Where-Object { $_ -and (Test-Path $_) } | Select-Object -Unique)
 }
 
 # ==============================================================================
@@ -379,7 +565,7 @@ function Invoke-PZCleanSaveMods {
 
     # Gather installed mod IDs
     $installedIds = @()
-    $wsPaths = Get-WorkshopPaths
+    $wsPaths = Get-WorkshopPaths -customPath $CustomWorkshopPath
     foreach ($w in $wsPaths) {
         $infos = Get-ChildItem -Path $w -Recurse -Filter "mod.info" -ErrorAction SilentlyContinue
         foreach ($i in $infos) {
@@ -1340,7 +1526,7 @@ function Build-FreezeCluster($frames) {
 # ==============================================================================
 function Invoke-PZScanEngine([string]$CustomServerIni = "", [switch]$LocalWorkshopOnly, [string]$CustomWorkshopPath = "", [string]$CustomLog = "") {
     Write-Host "`n=================================================================" -ForegroundColor Cyan
-    Write-Host "   PROJECT ZOMBOID MOD PERFORMANCE & OPTIMIZATION SUITE v2.16.0 " -ForegroundColor Yellow
+    Write-Host "   PROJECT ZOMBOID MOD PERFORMANCE & OPTIMIZATION SUITE v2.17.0 " -ForegroundColor Yellow
     Write-Host "         Created by @KodeMannn with the help of Gemini          " -ForegroundColor DarkCyan
     Write-Host "=================================================================`n" -ForegroundColor Cyan
 
@@ -1351,7 +1537,24 @@ function Invoke-PZScanEngine([string]$CustomServerIni = "", [switch]$LocalWorksh
     }
     Write-Host " [INFO] Detected Game Version: $pzVersion" -ForegroundColor Gray
 
-    $validWorkshopPaths = Get-WorkshopPaths
+    $validWorkshopPaths = Get-WorkshopPaths -customPath $CustomWorkshopPath
+    if ((-not $validWorkshopPaths -or $validWorkshopPaths.Count -eq 0) -and -not $LocalWorkshopOnly -and -not $Auto) {
+        Write-Host " [!] NOTICE: No Steam Workshop libraries detected automatically on standard paths." -ForegroundColor Yellow
+        Write-Host "     If your game or mods are on another drive (e.g. D:, E:), enter the path below." -ForegroundColor Gray
+        $promptWs = (Read-Host "     Enter Steam or Workshop folder (or press [Enter] to skip)").Trim().Trim('"').Trim("'")
+        if ($promptWs) {
+            $resolvedWs = Resolve-CustomWorkshopPath $promptWs
+            if ($resolvedWs -and (Test-Path $resolvedWs)) {
+                Set-PZScannerConfig $resolvedWs
+                $CustomWorkshopPath = $resolvedWs
+                $script:CustomWorkshopPath = $resolvedWs
+                $validWorkshopPaths = @($resolvedWs)
+                Write-Host " [SUCCESS] Saved and added Workshop path: $resolvedWs" -ForegroundColor Green
+            } else {
+                Write-Host " [!] Path not found or inaccessible: $promptWs" -ForegroundColor Red
+            }
+        }
+    }
     Write-Host " [INFO] Found $($validWorkshopPaths.Count) Steam Workshop Librar$(if($validWorkshopPaths.Count -eq 1){'y'}else{'ies'})" -ForegroundColor Gray
 
     $targetLogItem = Resolve-PZEngineLogFile -userPath $ZomboidUserPath -customLog $CustomLog
@@ -2918,7 +3121,7 @@ function Invoke-PZScanEngine([string]$CustomServerIni = "", [switch]$LocalWorksh
     $md = @()
     $md += "# Project Zomboid Mod Performance & Optimization Diagnostic Report"
     $hostName = if ($env:COMPUTERNAME) { $env:COMPUTERNAME } elseif ($env:HOSTNAME) { $env:HOSTNAME } else { [System.Net.Dns]::GetHostName() }
-    $md += "*Generated: $(Get-Date -Format 'yyyy-MM-dd HH:mm:ss') on $hostName by PZ-Mod-Performance-Suite v2.16.0 (Coded with the help of Google Gemini)*"
+    $md += "*Generated: $(Get-Date -Format 'yyyy-MM-dd HH:mm:ss') on $hostName by PZ-Mod-Performance-Suite v2.17.0 (Coded with the help of Google Gemini)*"
     $md += ""
     $md += "## Executive Summary"
     $md += "- **Game Version:** $pzVersion"
@@ -3293,13 +3496,70 @@ function Invoke-PZScanEngine([string]$CustomServerIni = "", [switch]$LocalWorksh
 }
 
 # ==============================================================================
+# Helper Function: Interactive Custom Workshop Path Configuration
+# ==============================================================================
+function Configure-PZCustomWorkshopPath {
+    Write-Host "`n-----------------------------------------------------------------" -ForegroundColor Cyan
+    Write-Host "   CONFIGURE CUSTOM STEAM WORKSHOP / MOD PATH                    " -ForegroundColor Yellow
+    Write-Host "-----------------------------------------------------------------" -ForegroundColor Cyan
+    $cfg = Get-PZScannerConfig
+    $current = if ($cfg.CustomWorkshopPath) { $cfg.CustomWorkshopPath } else { "None (Using Auto-Discovery)" }
+    Write-Host " Current Custom Path : $current" -ForegroundColor White
+
+    $detected = Get-WorkshopPaths
+    Write-Host "`n Discovered Workshop Libraries ($($detected.Count)):" -ForegroundColor Cyan
+    if ($detected.Count -eq 0) {
+        Write-Host "   (None automatically detected on standard paths)" -ForegroundColor DarkGray
+    } else {
+        foreach ($d in $detected) {
+            Write-Host "   -> $d" -ForegroundColor Gray
+        }
+    }
+
+    Write-Host "`n Options:" -ForegroundColor Cyan
+    Write-Host "  [1] Set / Update Custom Path (Enter or Drag & Drop folder)" -ForegroundColor White
+    Write-Host "  [2] Clear Custom Path (Revert to pure Auto-Discovery)" -ForegroundColor White
+    Write-Host "  [0] Return to Main Menu" -ForegroundColor Gray
+
+    $opt = Read-Host "`n Select an option (0-2)"
+    switch ($opt.Trim()) {
+        "1" {
+            Write-Host "`nEnter full path to your Steam Workshop content folder or Steam library:`n(Example: D:\SteamLibrary\steamapps\workshop\content\108600)" -ForegroundColor Yellow
+            $inputPath = (Read-Host " Path").Trim().Trim('"').Trim("'")
+            if ($inputPath) {
+                $resolved = Resolve-CustomWorkshopPath $inputPath
+                if ($resolved -and (Test-Path $resolved)) {
+                    $modCount = (Get-ChildItem -Path $resolved -Recurse -Filter "mod.info" -ErrorAction SilentlyContinue).Count
+                    Set-PZScannerConfig $resolved
+                    $script:CustomWorkshopPath = $resolved
+                    Write-Host "`n [SUCCESS] Custom path verified & saved: $resolved" -ForegroundColor Green
+                    Write-Host "           Discovered $modCount mod(s) in this folder." -ForegroundColor Gray
+                } else {
+                    Write-Host "`n [ERROR] Path does not exist or is inaccessible: $inputPath" -ForegroundColor Red
+                }
+            }
+        }
+        "2" {
+            Set-PZScannerConfig ""
+            $script:CustomWorkshopPath = ""
+            Write-Host "`n [SUCCESS] Custom path cleared. Scanner will use pure auto-discovery." -ForegroundColor Green
+        }
+        Default {
+            Write-Host " Return to menu." -ForegroundColor Gray
+        }
+    }
+    Write-Host "`nPress Enter to return to menu..." -ForegroundColor Gray
+    Read-Host | Out-Null
+}
+
+# ==============================================================================
 # Interactive TUI Menu
 # ==============================================================================
 function Show-PZMainMenu {
     while ($true) {
         Clear-Host
         Write-Host "=================================================================" -ForegroundColor Cyan
-        Write-Host "   PROJECT ZOMBOID MOD PERFORMANCE & OPTIMIZATION SUITE v2.16.0 " -ForegroundColor Yellow
+        Write-Host "   PROJECT ZOMBOID MOD PERFORMANCE & OPTIMIZATION SUITE v2.17.0 " -ForegroundColor Yellow
         Write-Host "         Created by @KodeMannn with the help of Gemini          " -ForegroundColor DarkCyan
         Write-Host "=================================================================" -ForegroundColor Cyan
         Write-Host "  [1] Run Full Performance Diagnostic Scan (Active Save)" -ForegroundColor White
@@ -3310,13 +3570,14 @@ function Show-PZMainMenu {
         Write-Host "  [6] Clean Phantom / Missing Mods from Savegame" -ForegroundColor White
         Write-Host "  [7] Revert Changes / Restore Backups (JVM, FPS, Savegame)" -ForegroundColor Yellow
         Write-Host "  [8] Open Last Generated Diagnostic Report" -ForegroundColor White
+        Write-Host "  [9] Configure Custom Steam Workshop / Mod Path" -ForegroundColor White
         Write-Host "  [0] Exit" -ForegroundColor Gray
         Write-Host "=================================================================" -ForegroundColor Cyan
         
-        $choice = Read-Host " Select an option (0-8)"
+        $choice = Read-Host " Select an option (0-9)"
         switch ($choice.Trim()) {
             "1" {
-                Invoke-PZScanEngine -CustomLog $CustomLogPath
+                Invoke-PZScanEngine -CustomWorkshopPath $CustomWorkshopPath -CustomLog $CustomLogPath
                 Write-Host "Press Enter to return to menu..." -ForegroundColor Gray
                 Read-Host | Out-Null
             }
@@ -3324,7 +3585,7 @@ function Show-PZMainMenu {
                 Write-Host "`nEnter path to server .ini file (or drag and drop it here):" -ForegroundColor Cyan
                 $iniPath = (Read-Host).Trim().Trim('"')
                 if ($iniPath -and (Test-Path $iniPath)) {
-                    Invoke-PZScanEngine -CustomServerIni $iniPath
+                    Invoke-PZScanEngine -CustomServerIni $iniPath -CustomWorkshopPath $CustomWorkshopPath -CustomLog $CustomLogPath
                 } else {
                     Write-Host " [!] File not found: $iniPath" -ForegroundColor Red
                 }
@@ -3332,12 +3593,13 @@ function Show-PZMainMenu {
                 Read-Host | Out-Null
             }
             "3" {
-                $defaultWs = Join-Path $ZomboidUserPath "Workshop"
-                Write-Host "`nLocal Workshop Folder: $defaultWs" -ForegroundColor Cyan
-                Write-Host "Press [Enter] to scan default folder, or enter a custom path:" -ForegroundColor Gray
-                $customPath = (Read-Host).Trim().Trim('"')
-                $wsToScan = if ($customPath -and (Test-Path $customPath)) { $customPath } else { $defaultWs }
-                Invoke-PZScanEngine -LocalWorkshopOnly -CustomWorkshopPath $wsToScan
+                $cfg = Get-PZScannerConfig
+                $defaultWs = if ($CustomWorkshopPath) { $CustomWorkshopPath } elseif ($cfg.CustomWorkshopPath) { $cfg.CustomWorkshopPath } else { Join-Path $ZomboidUserPath "Workshop" }
+                Write-Host "`nTarget Workshop Folder: $defaultWs" -ForegroundColor Cyan
+                Write-Host "Press [Enter] to scan this folder, or enter a custom path:" -ForegroundColor Gray
+                $customPath = (Read-Host).Trim().Trim('"').Trim("'")
+                $wsToScan = if ($customPath -and (Test-Path $customPath)) { Resolve-CustomWorkshopPath $customPath } else { $defaultWs }
+                Invoke-PZScanEngine -LocalWorkshopOnly -CustomWorkshopPath $wsToScan -CustomLog $CustomLogPath
                 Write-Host "`nPress Enter to return to menu..." -ForegroundColor Gray
                 Read-Host | Out-Null
             }
@@ -3412,6 +3674,9 @@ function Show-PZMainMenu {
                     Start-Sleep -Seconds 2
                 }
             }
+            "9" {
+                Configure-PZCustomWorkshopPath
+            }
             "0" {
                 Write-Host "`nExiting. Good luck surviving in Kentucky!`n" -ForegroundColor Green
                 return
@@ -3438,9 +3703,9 @@ if ($Revert) {
 } elseif ($LocalWorkshop) {
     Invoke-PZScanEngine -LocalWorkshopOnly -CustomWorkshopPath $CustomWorkshopPath -CustomLog $CustomLogPath
 } elseif ($ServerConfigPath) {
-    Invoke-PZScanEngine -CustomServerIni $ServerConfigPath -CustomLog $CustomLogPath
+    Invoke-PZScanEngine -CustomServerIni $ServerConfigPath -CustomWorkshopPath $CustomWorkshopPath -CustomLog $CustomLogPath
 } elseif ($Auto -or $StutterRoster) {
-    Invoke-PZScanEngine -CustomLog $CustomLogPath
+    Invoke-PZScanEngine -CustomWorkshopPath $CustomWorkshopPath -CustomLog $CustomLogPath
 } else {
     Show-PZMainMenu
 }

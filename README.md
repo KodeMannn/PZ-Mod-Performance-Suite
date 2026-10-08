@@ -65,6 +65,9 @@ Run interactive or automated scans with command-line flags:
 
 # Ingest a specific engine log (e.g. Build 42 DebugLog or dedicated server log):
 .\Scan-PZModPerformance.ps1 -CustomLogPath "$env:USERPROFILE\Zomboid\Logs\2026-10-05_09-02_DebugLog.txt"
+
+# Specify a custom Steam Workshop or mod folder path (e.g. secondary drive D:\SteamLibrary):
+.\Scan-PZModPerformance.ps1 -CustomWorkshopPath "D:\SteamLibrary\steamapps\workshop\content\108600"
 ```
 
 > **Zero Dependencies:** Requires no installation, no extra modules, and no separate `.ps1` file. Runs out-of-the-box on Windows 10 & 11 via native PowerShell-Batch polyglot execution.
@@ -73,23 +76,29 @@ Run interactive or automated scans with command-line flags:
 
 ## 🚀 Suite Profiles & Operations
 
-PZ-Mod-Performance-Suite features 8 selectable operations to fit your workflow:
+PZ-Mod-Performance-Suite features 9 selectable operations to fit your workflow:
 
 | Profile | Action / Target | Typical Duration | Best For |
 | :--- | :--- | :--- | :--- |
 | **`[1] Full Diagnostic Scan`** *(Default)* | Active Save (`mods.txt`), Workshop, Lua Hooks, VRAM, Hitches, Stutter Roster, Overrides | **~2.5 seconds** | Complete performance, stutter ranking & conflict audit of active save |
 | **`[2] Dedicated Server Scan`** | Dedicated server `.ini` files (`servertest.ini` or custom path) | **~2.5 seconds** | Auditing server modpacks for VPS, Pterodactyl, and Co-op hosts |
-| **`[3] Scan Local Workshop Mods`** | Local workshop development folder (`Zomboid\Workshop`) | **< 1 second** | Profiling custom mods under development before publishing to Steam |
+| **`[3] Scan Local Workshop Mods`** | Local workshop development folder (`Zomboid\Workshop` or custom) | **< 1 second** | Profiling custom mods under development before publishing to Steam |
 | **`[4] 1-Click Java GC Tuning`** | `ProjectZomboid64.json` launcher configuration | **< 1 second** | Eliminating 200–400ms periodic world freezes via low-latency G1GC |
 | **`[5] Safe Frame Cap Tuning`** | `options.ini` display frameRate setting | **< 1 second** | Throttling Lua tick execution overhead down from 240/uncapped FPS |
 | **`[6] Clean Phantom Mods`** | Active savegame `mods.txt` | **< 1 second** | Purging uninstalled ghost mods to stop console spam and speed up boot |
 | **`[7] Revert Changes / Backups`** | JVM config, FPS cap, and savegame mods | **< 1 second** | Safely restoring original `.bak` backups and vanilla engine settings |
 | **`[8] Open Last Report`** | `ModPerformanceReport.md` | **Instant** | Viewing detailed breakdown, conflict tables, and Discord summaries |
+| **`[9] Configure Workshop Path`** | Persistent config (`pz_scanner_config.json`) | **Instant** | Configuring custom Workshop or Steam library paths on secondary drives |
 
 ---
 
 ## 🔍 Key Features
 
+* **💾 Multi-Drive Steam Library Discovery & Custom Workshop Paths (v2.17.0):**
+  * **Dynamic Multi-Drive Enumeration:** Completely resolves workshop detection issues on secondary drives (e.g. `D:`, `E:`, `F:`, `G:`) and custom Steam library configurations. Automatically inspects Windows Registry (`Steam App 108600` uninstall key and Valve Steam install keys), iterates all active logical drives via `[System.IO.DriveInfo]::GetDrives()`, and parses `libraryfolders.vdf` across all drives with support for both modern and legacy VDF formatting.
+  * **Persistent Custom Workshop Path Configuration (`pz_scanner_config.json`):** Provides Menu Option `[9]` to inspect discovered libraries and configure/persist a custom Steam Workshop or mod directory path without having to re-enter it on every run.
+  * **Active Save Integration & Phantom Mod Protection:** Connects custom workshop paths into active save audits (Option `[1]`) and phantom mod cleanup (Option `[6]`), ensuring mods installed on secondary drives are properly profiled and never falsely flagged as missing.
+  * **Interactive Fallback Prompt:** If auto-discovery finds 0 workshop paths during an active scan, the scanner interactively prompts the user to enter or drag-and-drop their Steam library folder on the spot rather than silently failing to local mods.
 * **🎯 Multi-Scenario Trigger Taxonomy & Granular Performance Impact Matrix (v2.16.0):**
   * **Exhaustive Multi-Trigger Detection:** Completely eliminates the single-branch limitation where multi-faceted mods could only display one trigger scenario. Every active mod is now deeply evaluated across 8 operational dimensions (3D geometry compilation, VRAM texture streaming, continuous per-frame tick loops, state-gated interaction triggers, container rebuilds, vehicle physics & script checks, Java bytecode transforms, and dormant baselines).
   * **Granular Performance Impact for Every Scenario:** Quantifies predicted frame spikes, render stalls, and CPU frame taxes for each individual trigger scenario. For example, `Viewpoint (Core)` exposes all 4 operational states: Character & Skeletal Bone Snapshots (`~126-295 ms [Snapshot CPU Stall]`), Dynamic Lamp & Headlight Shadows (`~78-195 ms [Shadow Render Stall]`), 1P Camera Matrix Pass (`~10-25 ms [1P Render Pass] (+0.75 ms/frame)`), and Third-Person Mode Baseline (`< 1 ms [Imperceptible] (+0.15 ms/frame idle)`).
